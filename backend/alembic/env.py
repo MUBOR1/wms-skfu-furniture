@@ -10,7 +10,20 @@ from alembic import context
 
 # 2. ТЕПЕРЬ импортируем настройки и модели
 from database import Base, settings, engine
-from models import User, Zone, Cell, Product, WarehouseDocument, DocumentItem, Stock, Inventory, InventoryRecord  # noqa: F401
+
+# Импортируем ВСЕ модели для Alembic (чтобы он их видел при авто-генерации)
+# Порядок не важен, главное — чтобы все были здесь
+from models.user import User
+from models.product import Product
+from models.zone import Zone
+from models.cell import Cell
+from models.stock import Stock
+from models.document import WarehouseDocument, DocumentItem
+from models.inventory import Inventory, InventoryRecord
+from models.order import Order, OrderItem  # ← Заказы добавлены
+
+# Убираем дубли и лишние импорты из одной строки — используем явные импорты выше
+# Это надёжнее и понятнее для Alembic
 
 # Alembic Config object
 config = context.config

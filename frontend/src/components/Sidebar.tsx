@@ -32,6 +32,12 @@ export default function Sidebar() {
           </NavLink>
         )}
 
+        {isWorkerOrAbove && (
+          <NavLink to="/orders" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
+            <FileText className="w-5 h-5" /> Заказы
+          </NavLink>
+        )}
+
         {isManagerOrAdmin && (
           <NavLink to="/documents" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
             <FileText className="w-5 h-5" /> Документы

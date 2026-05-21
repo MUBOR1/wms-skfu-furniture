@@ -59,3 +59,10 @@ export const inventory = {
   create: (data: any) => request('/inventory/', { method: 'POST', body: JSON.stringify(data) }),
   complete: (id: number) => request(`/inventory/${id}/complete`, { method: 'POST' }),
 }
+
+export const orders = {
+  list: () => request('/orders/'),
+  create: (data: any) => request('/orders/', { method: 'POST', body: JSON.stringify(data) }),
+  get: (id: number) => request(`/orders/${id}`),
+  updateStatus: (id: number, status: string) => request(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+}
