@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { catalog, documents, inventory } from '../api/wms'
+import { useAuth } from '../context/AuthContext'
 import { Package, TrendingUp, FileText, AlertTriangle, ArrowRight, Plus } from 'lucide-react'
 
 export default function DashboardPage() {
   const navigate = useNavigate()
+  const { hasRole } = useAuth()
   const [stats, setStats] = useState({ products: 0, totalStock: 0, activeDocs: 0, lowStock: 0 })
   const [lowStockItems, setLowStockItems] = useState<any[]>([])
   const [recentDocs, setRecentDocs] = useState<any[]>([])
@@ -18,7 +20,6 @@ export default function DashboardPage() {
           documents.list(),
           inventory.report()
         ])
-
         const products = Array.isArray(productsRes) ? productsRes : []
         const docs = Array.isArray(docsRes) ? docsRes : []
         const stock = Array.isArray(stockRes) ? stockRes : []
@@ -38,16 +39,15 @@ export default function DashboardPage() {
           ...d,
           date: new Date(d.created_at).toLocaleDateString('ru-RU')
         })))
-      } catch (err) {
-        console.error('Dashboard error:', err)
-      } finally {
-        setIsLoading(false)
-      }
+      } catch (err) { console.error('Dashboard error:', err) }
+      finally { setIsLoading(false) }
     }
     load()
   }, [])
 
-  if (isLoading) return <div className="p-6"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 border-t-transparent rounded-full mx-auto"></div></div>
+  const isManagerOrAdmin = hasRole(['admin', 'warehouse_manager'])
+
+  if (isLoading) return <div className="p-6 flex justify-center"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent"></div></div>
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -58,41 +58,10 @@ export default function DashboardPage() {
 
       {/* Карточки статистики */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-2 bg-blue-50 rounded-lg"><Package className="w-5 h-5 text-blue-600" /></div>
-            <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded">Всего</span>
-          </div>
-          <p className="text-2xl font-bold">{stats.products}</p>
-          <p className="text-sm text-gray-500 mt-1">Позиций в номенклатуре</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-2 bg-green-50 rounded-lg"><TrendingUp className="w-5 h-5 text-green-600" /></div>
-            <span className="text-xs font-medium text-green-600 bg-green-50 px-2 py-1 rounded">Остаток</span>
-          </div>
-          <p className="text-2xl font-bold">{stats.totalStock.toLocaleString('ru-RU')}</p>
-          <p className="text-sm text-gray-500 mt-1">Единиц на складе</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-2 bg-indigo-50 rounded-lg"><FileText className="w-5 h-5 text-indigo-600" /></div>
-            <span className="text-xs font-medium text-indigo-600 bg-indigo-50 px-2 py-1 rounded">Активные</span>
-          </div>
-          <p className="text-2xl font-bold">{stats.activeDocs}</p>
-          <p className="text-sm text-gray-500 mt-1">Документов в работе</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-2 bg-red-50 rounded-lg"><AlertTriangle className="w-5 h-5 text-red-600" /></div>
-            <span className="text-xs font-medium text-red-600 bg-red-50 px-2 py-1 rounded">Внимание</span>
-          </div>
-          <p className="text-2xl font-bold">{stats.lowStock}</p>
-          <p className="text-sm text-gray-500 mt-1">Требуют пополнения</p>
-        </div>
+        <StatCard icon={<Package className="w-5 h-5 text-blue-600" />} value={stats.products} label="Позиций в номенклатуре" color="blue" />
+        <StatCard icon={<TrendingUp className="w-5 h-5 text-green-600" />} value={stats.totalStock} label="Единиц на складе" color="green" />
+        <StatCard icon={<FileText className="w-5 h-5 text-indigo-600" />} value={stats.activeDocs} label="Документов в работе" color="indigo" />
+        <StatCard icon={<AlertTriangle className="w-5 h-5 text-red-600" />} value={stats.lowStock} label="Требуют пополнения" color="red" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -141,11 +110,7 @@ export default function DashboardPage() {
                     <p className="font-medium text-sm">{doc.doc_number}</p>
                     <p className="text-xs text-gray-500">{doc.date} • {doc.type}</p>
                   </div>
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    doc.status === 'draft' ? 'bg-gray-100 text-gray-700' :
-                    doc.status === 'completed' ? 'bg-green-100 text-green-700' :
-                    'bg-blue-100 text-blue-700'
-                  }`}>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${doc.status === 'draft' ? 'bg-gray-100 text-gray-700' : doc.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
                     {doc.status === 'draft' ? 'Черновик' : doc.status === 'completed' ? 'Проведён' : 'В работе'}
                   </span>
                 </div>
@@ -155,21 +120,45 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Быстрые действия */}
+      {/* ⚡ Быстрые действия (с проверкой ролей) */}
       <div className="bg-gradient-to-r from-indigo-600 to-blue-600 rounded-xl p-6 text-white shadow-lg">
         <h3 className="text-lg font-semibold mb-3">⚡ Быстрые действия</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button onClick={() => navigate('/documents')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
-            <Plus className="w-4 h-4" /> Создать приёмку
-          </button>
-          <button onClick={() => navigate('/inventory')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
-            <Plus className="w-4 h-4" /> Начать инвентаризацию
-          </button>
-          <button onClick={() => navigate('/products')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
-            <Plus className="w-4 h-4" /> Добавить товар
-          </button>
+          {isManagerOrAdmin && (
+            <button onClick={() => navigate('/documents')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
+              <Plus className="w-4 h-4" /> Создать приёмку
+            </button>
+          )}
+          {isManagerOrAdmin && (
+            <button onClick={() => navigate('/inventory')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
+              <Plus className="w-4 h-4" /> Начать инвентаризацию
+            </button>
+          )}
+          {hasRole(['admin', 'warehouse_manager']) && (
+            <button onClick={() => navigate('/products')} className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-3 rounded-lg transition-colors text-left">
+              <Plus className="w-4 h-4" /> Добавить товар
+            </button>
+          )}
+          {!isManagerOrAdmin && !hasRole(['admin', 'warehouse_manager']) && (
+            <p className="text-white/80 text-sm col-span-3">У вас ограниченный доступ. Обратитесь к менеджеру для выполнения операций.</p>
+          )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// Компонент карточки статистики
+function StatCard({ icon, value, label, color }: { icon: React.ReactNode; value: number; label: string; color: string }) {
+  const colorMap: Record<string, string> = { blue: 'bg-blue-50 text-blue-600', green: 'bg-green-50 text-green-600', indigo: 'bg-indigo-50 text-indigo-600', red: 'bg-red-50 text-red-600' }
+  return (
+    <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between mb-3">
+        <div className={`p-2 rounded-lg ${colorMap[color]}`}>{icon}</div>
+        <span className={`text-xs font-medium px-2 py-1 rounded ${colorMap[color]}`}>Активно</span>
+      </div>
+      <p className="text-2xl font-bold">{value}</p>
+      <p className="text-sm text-gray-500 mt-1">{label}</p>
     </div>
   )
 }

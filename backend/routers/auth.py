@@ -18,7 +18,7 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
         login=user_data.login,
         password_hash=get_password_hash(user_data.password),
         full_name=user_data.full_name,
-        role="warehouse_worker"
+        role=user_data.role  # ← НОВОЕ: берём роль из запроса
     )
     db.add(new_user)
     db.commit()

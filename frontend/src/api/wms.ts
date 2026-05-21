@@ -35,7 +35,7 @@ export const auth = {
     }),
   register: (data: { login: string; password: string; full_name?: string }) => 
     request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
-  me: () => request('/auth/me'),
+    me: () => request<{ id: number; login: string; role: 'admin' | 'warehouse_manager' | 'warehouse_worker' | 'client'; full_name: string | null; is_active: boolean }>('/auth/me'),
 }
 
 export const catalog = {

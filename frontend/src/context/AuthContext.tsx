@@ -1,19 +1,23 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import type { ReactNode } from 'react'  // ← type-only import для verbatimModuleSyntax
+import type { ReactNode } from 'react'
 
-interface User {
+export type UserRole = 'admin' | 'warehouse_manager' | 'warehouse_worker' | 'client'
+
+export interface User {
   id: number
   login: string
-  role: string
-  full_name?: string
+  role: UserRole
+  full_name?: string | null
+  is_active?: boolean
 }
 
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null
   token: string | null
   login: (token: string, user: User) => void
   logout: () => void
   isLoading: boolean
+  hasRole: (roles: UserRole[]) => boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -32,7 +36,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(JSON.parse(savedUser) as User)
       }
     } catch (e) {
-      console.error('Auth init error:', e)
       localStorage.removeItem('wms_token')
       localStorage.removeItem('wms_user')
     } finally {
@@ -54,8 +57,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('wms_user')
   }
 
+  const hasRole = (roles: UserRole[]): boolean => {
+    if (!user?.role) return false
+    return roles.includes(user.role)
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, logout, isLoading, hasRole }}>
       {children}
     </AuthContext.Provider>
   )
