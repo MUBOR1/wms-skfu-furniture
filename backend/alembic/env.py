@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 from database import Base, settings, engine
-from models import User, Zone, Cell, Product, WarehouseDocument, DocumentItem, Stock
+from models import User, Zone, Cell, Product, WarehouseDocument, DocumentItem, Stock, Inventory, InventoryRecord
 
 # 1. Добавляем backend в PYTHONPATH, чтобы Alembic видел наши модули
 sys.path.append(str(Path(__file__).resolve().parent.parent))
