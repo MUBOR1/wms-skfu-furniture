@@ -1,3 +1,4 @@
+
 services:
   db:
     image: postgres:15-alpine
@@ -5,33 +6,24 @@ services:
       POSTGRES_USER: wms_user
       POSTGRES_PASSWORD: wms_pass_dev
       POSTGRES_DB: wms_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    volumes: [pgdata:/var/lib/postgresql/data]
+    ports: ["5432:5432"]
 
   backend:
     build: ./backend
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    volumes:
-      - ./backend:/app
-    ports:
-      - "8000:8000"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
     environment:
-      FRONTEND_URL: http://localhost:5173
-    depends_on:
-      - db
+      - DATABASE_URL=postgresql+psycopg://wms_user:wms_pass_dev@db:5432/wms_db
+      - SECRET_KEY=prod_secret_key_change_me
+    depends_on: [db]
+    ports: ["8000:8000"]
 
   frontend:
-    build: ./frontend
-    command: npm run dev -- --host
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    ports:
-      - "5173:5173"
-    depends_on:
-      - backend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    depends_on: [backend]
+    ports: ["80:80"]
 
 volumes:
   pgdata:

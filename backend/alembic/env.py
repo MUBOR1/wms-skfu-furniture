@@ -2,13 +2,15 @@ import sys
 from pathlib import Path
 from logging.config import fileConfig
 
+# 1. СНАЧАЛА добавляем backend в PYTHONPATH, чтобы Alembic видел наши модули
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from sqlalchemy import engine_from_config, pool
 from alembic import context
-from database import Base, settings, engine
-from models import User, Zone, Cell, Product, WarehouseDocument, DocumentItem, Stock, Inventory, InventoryRecord
 
-# 1. Добавляем backend в PYTHONPATH, чтобы Alembic видел наши модули
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+# 2. ТЕПЕРЬ импортируем настройки и модели
+from database import Base, settings, engine
+from models import User, Zone, Cell, Product, WarehouseDocument, DocumentItem, Stock, Inventory, InventoryRecord  # noqa: F401
 
 # Alembic Config object
 config = context.config
@@ -22,8 +24,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode (не используется, но оставим для совместимости)."""
-    # Используем URL из наших настроек, а не из alembic.ini
+    """Run migrations in 'offline' mode."""
     url = settings.DATABASE_URL
     context.configure(
         url=url,
@@ -37,14 +38,13 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    # ← ИСПОЛЬЗУЕМ engine из database.py, который уже настроен с .env
     connectable = engine
     
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            compare_type=True  # Сравнивать типы колонок
+            compare_type=True
         )
         with context.begin_transaction():
             context.run_migrations()
