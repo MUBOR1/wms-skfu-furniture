@@ -1,10 +1,11 @@
 import { createContext, useContext, useState, useEffect } from 'react'
-import type { ReactNode } from 'react'  // ← type-only import
+import type { ReactNode } from 'react'  // ← type-only import для verbatimModuleSyntax
 
 interface User {
   id: number
   login: string
   role: string
+  full_name?: string
 }
 
 interface AuthContextType {
@@ -17,19 +18,26 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-export function AuthProvider({ children }: { children: ReactNode }) {  // ← Теперь работает
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('wms_token')
-    const savedUser = localStorage.getItem('wms_user')
-    if (savedToken && savedUser) {
-      setToken(savedToken)
-      setUser(JSON.parse(savedUser) as User)  // ← Явное приведение
+    try {
+      const savedToken = localStorage.getItem('wms_token')
+      const savedUser = localStorage.getItem('wms_user')
+      if (savedToken && savedUser) {
+        setToken(savedToken)
+        setUser(JSON.parse(savedUser) as User)
+      }
+    } catch (e) {
+      console.error('Auth init error:', e)
+      localStorage.removeItem('wms_token')
+      localStorage.removeItem('wms_user')
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }, [])
 
   const login = (newToken: string, newUser: User) => {

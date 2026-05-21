@@ -11,14 +11,14 @@ if (!(Test-Path "backend/main.py") -or !(Test-Path "frontend/package.json")) {
 
 # Start Backend
 Write-Host "Starting Backend (FastAPI) on port 8000..." -ForegroundColor Green
-$backend = Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "cd backend; .\venv\Scripts\Activate.ps1; uvicorn main:app --host 127.0.0.1 --port 8000 --reload" -PassThru
+Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "cd backend; .\venv\Scripts\Activate.ps1; uvicorn main:app --host 127.0.0.1 --port 8000 --reload"
 
 # Wait for backend to start
 Start-Sleep -Seconds 3
 
 # Start Frontend
 Write-Host "Starting Frontend (React+Vite) on port 5173..." -ForegroundColor Green
-$frontend = Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "cd frontend; npm run dev" -PassThru
+Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-Command", "cd frontend; npm run dev"
 
 # Done
 Write-Host "`nServers started!" -ForegroundColor Cyan

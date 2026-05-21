@@ -1,5 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 from typing import Optional, List
+from datetime import datetime
 from models.document import DocType, DocStatus
 
 class DocumentItemCreate(BaseModel):
@@ -19,6 +20,13 @@ class DocumentResponse(BaseModel):
     doc_number: str
     type: DocType
     status: DocStatus
-    created_at: Optional[str]
+    created_at: Optional[datetime]  # ← БЫЛО: str, СТАЛО: datetime
     comment: Optional[str]
     model_config = ConfigDict(from_attributes=True)
+    
+    # Сериализуем datetime в строку для JSON-ответа
+    @field_serializer('created_at')
+    def serialize_dt(self, value: datetime, _info):
+        if value is None:
+            return None
+        return value.isoformat()

@@ -13,21 +13,49 @@ export default function LoginPage() {
   const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setIsLoading(true)
+  e.preventDefault()
+  setError('')
+  setIsLoading(true)
+  
+  try {
+    // 1. Получаем токен
+    const response = await auth.login({ login, password })
+    const token = response.access_token  // ← Явно извлекаем токен
     
-    try {
-      const { access_token } = await auth.login({ login, password })
-      const user = await auth.me() as { id: number; login: string; role: string; full_name: string | null }
-      authLogin(access_token, user)
-      navigate('/dashboard')
-    } catch (err: any) {
-      setError(err.message || 'Ошибка входа')
-    } finally {
-      setIsLoading(false)
-    }
+    // 2. Сохраняем в localStorage НАДЁЖНО
+    localStorage.setItem('wms_token', token)
+    
+    // 3. Получаем данные пользователя
+    const userData = await auth.me() as { id: number; login: string; role: string; full_name: string | null }
+    
+    // 4. Сохраняем пользователя
+    localStorage.setItem('wms_user', JSON.stringify({
+      id: userData.id,
+      login: userData.login,
+      role: userData.role,
+      full_name: userData.full_name
+    }))
+    
+    // 5. Обновляем контекст
+    authLogin(token, {
+      id: userData.id,
+      login: userData.login,
+      role: userData.role
+    })
+    
+    // 6. Переходим в дашборд
+    navigate('/dashboard')
+    
+  } catch (err: any) {
+    console.error('Login error:', err)
+    setError(err.message || 'Ошибка входа')
+    // При ошибке очищаем токен
+    localStorage.removeItem('wms_token')
+    localStorage.removeItem('wms_user')
+  } finally {
+    setIsLoading(false)
   }
+}
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">

@@ -1,5 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 from typing import Optional, List
+from datetime import datetime
 from models.inventory import InvStatus
 
 class InventoryRecordCreate(BaseModel):
@@ -15,8 +16,14 @@ class InventoryResponse(BaseModel):
     id: int
     doc_number: str
     status: InvStatus
-    created_at: Optional[str]
+    created_at: Optional[datetime]  # ← БЫЛО: str, СТАЛО: datetime
     model_config = ConfigDict(from_attributes=True)
+    
+    @field_serializer('created_at')
+    def serialize_dt(self, value: datetime, _info):
+        if value is None:
+            return None
+        return value.isoformat()
 
 class StockReportItem(BaseModel):
     product_sku: str
