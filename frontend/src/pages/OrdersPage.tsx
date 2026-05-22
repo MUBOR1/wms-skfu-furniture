@@ -1,7 +1,18 @@
 import { useEffect, useState } from 'react'
-import { orders, catalog } from '../api/wms'
+import { orders, catalog,  } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
-import { Plus, CheckCircle, Clock, Truck, XCircle, Package } from 'lucide-react'
+import { Plus, CheckCircle, Clock, Truck, XCircle, Package, FileText } from 'lucide-react'
+
+interface Order {
+  id: number
+  order_number: string
+  client_id: number
+  status: string
+  total_amount: number
+  comment: string | null
+  created_at: string
+  shipment_doc_id?: number | null
+}
 
 const statusConfig: Record<string, { label: string; color: string; icon: any }> = {
   pending: { label: 'Ожидает', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
@@ -13,7 +24,7 @@ const statusConfig: Record<string, { label: string; color: string; icon: any }> 
 
 export default function OrdersPage() {
   const { hasRole } = useAuth()
-  const [ordersList, setOrdersList] = useState<any[]>([])
+  const [ordersList, setOrdersList] = useState<Order[]>([])
   const [products, setProducts] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -52,6 +63,19 @@ export default function OrdersPage() {
       setOrdersList(prev => prev.map(o => o.id === id ? { ...o, status } : o))
     } catch (err: any) { alert('❌ ' + (err.message)) }
   }
+
+  // 🔗 НОВАЯ ФУНКЦИЯ: Создание отгрузки из заказа
+  const handleCreateShipment = async (orderId: number) => {
+  try {
+    const res = await orders.createShipment(orderId)  // ← ИСПРАВЛЕНО: используем экспортированный метод
+    alert(`✅ ${res.message}\n📄 Документ: ${res.doc_number}`)
+    setOrdersList(prev => prev.map(o => 
+      o.id === orderId ? { ...o, shipment_doc_id: res.document_id } : o
+    ))
+  } catch (err: any) {
+    alert('❌ Ошибка: ' + (err.message || 'Не удалось создать отгрузку'))
+  }
+}
 
   const addItem = () => setNewOrder(prev => ({ ...prev, items: [...prev.items, { product_id: products[0]?.id || 1, quantity: 1, unit_price: 0 }] }))
   const updateItem = (idx: number, field: string, val: any) => {
@@ -103,6 +127,7 @@ export default function OrdersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Дата</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Сумма</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Отгрузка</th>
                 {hasRole(['admin', 'warehouse_manager']) && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Управление</th>}
               </tr>
             </thead>
@@ -119,11 +144,37 @@ export default function OrdersPage() {
                         <st.icon className="w-3 h-3" /> {st.label}
                       </span>
                     </td>
+                    <td className="px-4 py-3">
+                      {order.shipment_doc_id ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
+                          <FileText className="w-3 h-3" /> Создана
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 text-xs">—</span>
+                      )}
+                    </td>
                     {hasRole(['admin', 'warehouse_manager']) && (
                       <td className="px-4 py-3">
-                        <select value={order.status} onChange={e => handleStatusChange(order.id, e.target.value)} className="p-1 border rounded text-sm">
-                          {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
-                        </select>
+                        <div className="flex gap-2 items-center">
+                          <select 
+                            value={order.status} 
+                            onChange={e => handleStatusChange(order.id, e.target.value)} 
+                            className="p-1 border rounded text-sm"
+                          >
+                            {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
+                          </select>
+                          
+                          {/* 🔗 КНОПКА СОЗДАНИЯ ОТГРУЗКИ */}
+                          {!order.shipment_doc_id && (order.status === 'pending' || order.status === 'processing') && (
+                            <button
+                              onClick={() => handleCreateShipment(order.id)}
+                              className="px-2 py-1 bg-orange-600 text-white rounded text-xs font-medium hover:bg-orange-700 transition flex items-center gap-1"
+                              title="Создать документ отгрузки"
+                            >
+                              <FileText className="w-3 h-3" /> Отгрузка
+                            </button>
+                          )}
+                        </div>
                       </td>
                     )}
                   </tr>

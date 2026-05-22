@@ -1,8 +1,17 @@
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
-# ← ПРАВИЛЬНЫЙ ИМПОРТ: конкретные типы из модуля, а не сам модуль
-from models.document import DocType, DocStatus
+from enum import Enum
+
+class DocType(str, Enum):
+    RECEIVE = "receive"
+    SHIP = "ship"
+    ADJUST = "adjust"
+    TRANSFER = "transfer"
+
+class DocStatus(str, Enum):
+    DRAFT = "draft"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
 
 class DocumentItemCreate(BaseModel):
     product_id: int
@@ -11,7 +20,7 @@ class DocumentItemCreate(BaseModel):
     to_cell_id: Optional[int] = None
 
 class DocumentCreate(BaseModel):
-    doc_number: str
+    doc_number: Optional[str] = None
     type: DocType
     comment: Optional[str] = None
     items: List[DocumentItemCreate]
@@ -19,15 +28,10 @@ class DocumentCreate(BaseModel):
 class DocumentResponse(BaseModel):
     id: int
     doc_number: str
-    type: DocType  # ← ПРАВИЛЬНЫЙ ТИП: класс Enum, а не модуль
-    status: DocStatus
-    created_at: Optional[datetime]
-    comment: Optional[str]
-    model_config = ConfigDict(from_attributes=True)
+    type: str
+    status: str
+    operator_id: int
+    comment: Optional[str] = None
     
-    # Сериализация datetime → ISO-строка для JSON-ответа
-    @field_serializer('created_at')
-    def serialize_dt(self, value: datetime, _info):
-        if value is None:
-            return None
-        return value.isoformat()
+    class Config:
+        from_attributes = True

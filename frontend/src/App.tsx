@@ -11,6 +11,8 @@ import InventoryPage from './pages/InventoryPage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AdminSettingsPage from './pages/AdminSettingsPage'
 import OrdersPage from './pages/OrdersPage'
+import AnalyticsPage from './pages/AnalyticsPage'
+import AuditPage from './pages/AuditPage'
 
 // ... остальной код App.tsx без изменений ...
 
@@ -24,6 +26,8 @@ function AppContent() {
       <Route path="/inventory" element={<ProtectedRoute roles={['admin', 'warehouse_manager']}><InventoryPage /></ProtectedRoute>} />
       <Route path="/report" element={<ProtectedRoute roles={['admin', 'warehouse_manager', 'warehouse_worker']}><ReportPage /></ProtectedRoute>} />
       <Route path="/orders" element={<ProtectedRoute roles={['admin', 'warehouse_manager', 'warehouse_worker']}><OrdersPage /></ProtectedRoute>} />
+      <Route path="/analytics" element={<ProtectedRoute roles={['admin', 'warehouse_manager', 'warehouse_worker']}><AnalyticsPage /></ProtectedRoute>} />
+      <Route path="/audit" element={<ProtectedRoute roles={['admin', 'warehouse_manager']}><AuditPage /></ProtectedRoute>} />
       
       {/* Администрирование (только admin) */}
       <Route path="/admin/users" element={<ProtectedRoute roles={['admin']}><AdminUsersPage /></ProtectedRoute>} />

@@ -1,105 +1,123 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from database import get_db
-from core.security import get_current_user
+from core.permissions import require_manager, require_worker
+from core.audit import log_action
 from models.user import User
-from models.inventory import Inventory, InventoryRecord, InvStatus
-from models.stock import Stock
-from models.document import WarehouseDocument, DocumentItem, DocType, DocStatus
-from models.product import Product
-from schemas.inventory import InventoryCreate, InventoryResponse, StockReportItem
+from models.inventory import Inventory, InventoryRecord
+from schemas.inventory import InventoryCreate, InventoryResponse, InventoryRecordCreate
+from typing import List
 import uuid
-import traceback
 
-router = APIRouter(prefix="/api/inventory", tags=["Инвентаризация и Отчёты"])
+router = APIRouter(prefix="/api/inventory", tags=["Инвентаризация"])
 
-@router.post("/", response_model=InventoryResponse, status_code=201)
-def create_inventory(data: InventoryCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    try:
-        if not data.records:
-            raise HTTPException(400, "Добавьте хотя бы одну позицию")
-            
-        raw_num = data.doc_number.strip() if data.doc_number else ""
-        doc_number = raw_num if raw_num else f"INV-{uuid.uuid4().hex[:8].upper()}"
-        
-        inv = Inventory(doc_number=doc_number, operator_id=current_user.id)
-        db.add(inv)
-        db.flush()
+@router.post("/", response_model=InventoryResponse, status_code=status.HTTP_201_CREATED)
+def create_inventory(
+    data: InventoryCreate, 
+    db: Session = Depends(get_db), 
+    current_user: User = require_manager
+):
+    # 1. Берём данные из схемы
+    inventory_data = data.model_dump(exclude_unset=True)
+    
+    # 2. Генерируем doc_number, если поле есть и не передано
+    if 'doc_number' in inventory_data and not inventory_data.get('doc_number'):
+        inventory_data['doc_number'] = f"INV-{uuid.uuid4().hex[:8].upper()}"
+    
+    # 3. Создаём объект и заполняем только существующие поля
+    inventory = Inventory()
+    for field, value in inventory_data.items():
+        if hasattr(inventory, field):
+            setattr(inventory, field, value)
+    
+    # 4. Устанавливаем дефолты
+    if hasattr(inventory, 'status') and not inventory.status:
+        inventory.status = "draft"
+    if hasattr(inventory, 'operator_id') and current_user:
+        inventory.operator_id = current_user.id
+    
+    db.add(inventory)
+    db.flush()  # Получаем id
 
-        for rec in data.records:
-            if not rec.product_id: continue
-            stock = db.query(Stock).filter(Stock.product_id == rec.product_id).first()
-            planned = stock.quantity if stock else 0
-            db.add(InventoryRecord(
-                inventory_id=inv.id,
-                product_id=rec.product_id,
-                cell_id=rec.cell_id,
-                planned_qty=planned,
-                actual_qty=rec.actual_qty,
-                diff=rec.actual_qty - planned
-            ))
-        db.commit()
-        db.refresh(inv)
-        return inv
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(400, "Инвентаризация с таким номером уже существует")
-    except HTTPException: raise
-    except Exception as e:
-        db.rollback()
-        print(f"🔴 INVENTORY CREATE ERROR:\n{traceback.format_exc()}")
-        raise HTTPException(500, str(e))
+    # 5. Логируем
+    log_action(
+        db=db,
+        user=current_user,
+        action="CREATE",
+        entity_type="inventory",
+        entity_id=inventory.id,
+        new_value={"doc_number": getattr(inventory, 'doc_number', None), "status": getattr(inventory, 'status', 'draft')}
+    )
+
+    db.commit()
+    db.refresh(inventory)
+    return inventory
+
+@router.get("/", response_model=List[InventoryResponse])
+def list_inventories(db: Session = Depends(get_db), current_user: User = require_worker):
+    return db.query(Inventory).order_by(Inventory.created_at.desc()).all()
+
+@router.get("/{inv_id}", response_model=InventoryResponse)
+def get_inventory(inv_id: int, db: Session = Depends(get_db), current_user: User = require_worker):
+    inv = db.query(Inventory).filter(Inventory.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Инвентаризация не найдена")
+    return inv
+
+@router.post("/{inv_id}/records")
+def add_inventory_record(
+    inv_id: int,
+    data: InventoryRecordCreate,
+    db: Session = Depends(get_db),
+    current_user: User = require_worker
+):
+    inv = db.query(Inventory).filter(Inventory.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Инвентаризация не найдена")
+    
+    current_status = getattr(inv, 'status', None)
+    if current_status and current_status != "draft":
+        raise HTTPException(400, "Нельзя добавлять записи в завершённую инвентаризацию")
+    
+    record = InventoryRecord(inventory_id=inv_id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if hasattr(record, field):
+            setattr(record, field, value)
+    
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
 
 @router.post("/{inv_id}/complete", response_model=InventoryResponse)
-def complete_inventory(inv_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    try:
-        inv = db.query(Inventory).filter(Inventory.id == inv_id).first()
-        if not inv or inv.status != InvStatus.DRAFT:
-            raise HTTPException(400, "Можно завершить только черновик")
-
-        records = db.query(InventoryRecord).filter(InventoryRecord.inventory_id == inv_id).all()
-        adj_items = []
-        for rec in records:
-            rec.diff = rec.actual_qty - rec.planned_qty
-            if rec.diff != 0:
-                adj_items.append({"product_id": rec.product_id, "quantity": rec.diff})
-
-        for item in adj_items:
-            stock = db.query(Stock).filter(Stock.product_id == item["product_id"]).first()
-            if not stock:
-                stock = Stock(product_id=item["product_id"], quantity=0)
-                db.add(stock)
-            stock.quantity += item["quantity"]
-
-        if adj_items:
-            doc = WarehouseDocument(
-                doc_number=f"ADJ-{uuid.uuid4().hex[:8].upper()}",
-                type=DocType.ADJUST,
-                status=DocStatus.COMPLETED,
-                operator_id=inv.operator_id,
-                comment=f"Корректировка по {inv.doc_number}"
-            )
-            db.add(doc)
-            db.flush()
-            for ai in adj_items:
-                db.add(DocumentItem(doc_id=doc.id, product_id=ai["product_id"], quantity=ai["quantity"]))
-
-        inv.status = InvStatus.COMPLETED
-        db.commit()
-        db.refresh(inv)
-        return inv
-    except HTTPException: raise
-    except Exception as e:
-        db.rollback()
-        print(f"🔴 INVENTORY COMPLETE ERROR:\n{traceback.format_exc()}")
-        raise HTTPException(500, str(e))
-
-@router.get("/report/stock", response_model=list[StockReportItem])
-def get_stock_report(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    try:
-        rows = db.query(Stock.quantity, Product.sku, Product.name).join(Product, Stock.product_id == Product.id).all()
-        return [StockReportItem(product_sku=s, product_name=n, quantity=q) for q, s, n in rows]
-    except Exception as e:
-        print(f"🔴 REPORT ERROR: {e}")
-        return []
+def complete_inventory(
+    inv_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
+    inv = db.query(Inventory).filter(Inventory.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Инвентаризация не найдена")
+    
+    records = db.query(InventoryRecord).filter(InventoryRecord.inventory_id == inv_id).all()
+    if not records:
+        raise HTTPException(400, "Нельзя завершить пустую инвентаризацию")
+    
+    old_status = getattr(inv, 'status', 'unknown')
+    
+    if hasattr(inv, 'status'):
+        inv.status = "completed"
+    
+    log_action(
+        db=db,
+        user=current_user,
+        action="COMPLETE",
+        entity_type="inventory",
+        entity_id=inv_id,
+        old_value={"status": old_status},
+        new_value={"status": "completed"}
+    )
+    
+    db.commit()
+    db.refresh(inv)
+    return inv

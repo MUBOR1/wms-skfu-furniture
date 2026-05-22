@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
 from core.security import get_current_user
+from core.permissions import require_worker, require_manager
+from core.audit import log_action  # ← ИМПОРТ В НАЧАЛЕ ФАЙЛА
 from models.user import User
 from models.zone import Zone
 from models.cell import Cell
@@ -11,6 +14,7 @@ from schemas.catalog import (
     CellCreate, CellResponse,
     ProductCreate, ProductUpdate, ProductResponse
 )
+import csv, io, json
 
 router = APIRouter(prefix="/api/catalog", tags=["Справочники склада"])
 
@@ -45,12 +49,33 @@ def list_cells(zone_id: int = Query(None), db: Session = Depends(get_db), _: Use
 
 # === ТОВАРЫ ===
 @router.post("/products", response_model=ProductResponse)
-def create_product(data: ProductCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    product = Product(**data.model_dump())
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    return product
+def create_product(data: ProductCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    try:
+        # Явное создание объекта с ЦЕНАМИ
+        product = Product(
+            sku=data.sku,
+            name=data.name,
+            category=data.category,
+            description=data.description,
+            unit=data.unit,
+            weight_kg=data.weight_kg,
+            volume_m3=data.volume_m3,
+            barcode=data.barcode,
+            purchase_price=data.purchase_price,  # ← ДОБАВЛЕНО
+            sale_price=data.sale_price,           # ← ДОБАВЛЕНО
+            min_stock=data.min_stock,
+            max_stock=data.max_stock
+        )
+        db.add(product)
+        db.commit()
+        db.refresh(product)
+        
+        log_action(db, current_user, "CREATE", "product", product.id, 
+                   new_value={"sku": product.sku, "name": product.name, "sale_price": product.sale_price})
+        return product
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
 
 @router.get("/products", response_model=list[ProductResponse])
 def list_products(
@@ -62,3 +87,62 @@ def list_products(
     if search:
         query = query.filter(Product.name.ilike(f"%{search}%") | Product.sku.ilike(f"%{search}%"))
     return query.all()
+
+@router.get("/products/export")
+def export_products(db: Session = Depends(get_db), current_user: User = require_worker):
+    products = db.query(Product).all()
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(["sku", "name", "category", "weight_kg", "min_stock", "max_stock"])
+    for p in products:
+        writer.writerow([p.sku, p.name, p.category or "", p.weight_kg or 0, p.min_stock or 0, p.max_stock or 0])
+    stream.seek(0)
+    return StreamingResponse(
+        iter([stream.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=products_export.csv"}
+    )
+
+@router.post("/products/import")
+async def import_products(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(400, "Поддерживаются только CSV файлы")
+        
+    content = await file.read()
+    text = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    
+    created, updated, errors = 0, 0, []
+    
+    for i, row in enumerate(reader, 2):
+        try:
+            sku = row.get("sku", "").strip()
+            if not sku: raise ValueError("Отсутствует SKU")
+            
+            existing = db.query(Product).filter(Product.sku == sku).first()
+            data = {
+                "name": row.get("name", "Без имени"),
+                "category": row.get("category"),
+                "weight_kg": float(row.get("weight_kg", 0)),
+                "min_stock": int(row.get("min_stock", 0)),
+                "max_stock": int(row.get("max_stock", 0))
+            }
+            
+            if existing:
+                for k, v in data.items(): setattr(existing, k, v)
+                updated += 1
+            else:
+                db.add(Product(sku=sku, **data))
+                created += 1
+        except Exception as e:
+            errors.append(f"Строка {i} ({row.get('sku', '?')}): {str(e)}")
+            
+    if not errors:
+        db.commit()
+        return {"status": "success", "created": created, "updated": updated}
+    db.rollback()
+    return {"status": "errors", "created": created, "updated": updated, "errors": errors[:10]}

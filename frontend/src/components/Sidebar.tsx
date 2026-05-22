@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Package, FileText, ClipboardCheck, BarChart3, Users, Settings, LogOut } from 'lucide-react'
+import { LayoutDashboard, Package, FileText, ClipboardCheck, BarChart3, Users, Settings, LogOut, History as HistoryIcon } from 'lucide-react'
 
 export default function Sidebar() {
   const { logout, user, hasRole } = useAuth()
@@ -53,6 +53,18 @@ export default function Sidebar() {
         {isWorkerOrAbove && (
           <NavLink to="/report" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
             <BarChart3 className="w-5 h-5" /> Отчёты
+          </NavLink>
+        )}
+
+        {isWorkerOrAbove && (
+          <NavLink to="/analytics" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
+            <BarChart3 className="w-5 h-5" /> Аналитика
+          </NavLink>
+        )}
+
+        {isManagerOrAdmin && (
+          <NavLink to="/audit" className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isActive ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-700 hover:bg-gray-50'}`}>
+            <HistoryIcon className="w-5 h-5" /> Журнал действий
           </NavLink>
         )}
 

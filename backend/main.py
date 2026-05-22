@@ -7,6 +7,8 @@ from routers.catalog import router as catalog_router  # ← НОВОЕ
 from routers.inventory import router as inventory_router
 from routers.orders import router as orders_router
 from models.order import Order, OrderItem
+from routers.analytics import router as analytics_router
+from routers.audit import router as audit_router
 
 class Settings(BaseSettings):
     APP_ENV: str = "development"
@@ -29,6 +31,8 @@ app.include_router(catalog_router)  # ← НОВОЕ (после auth_router)
 app.include_router(documents_router)
 app.include_router(inventory_router)
 app.include_router(orders_router)
+app.include_router(analytics_router)
+app.include_router(audit_router)
 
 @app.get("/api/health")
 def health_check():

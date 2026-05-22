@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 from logging.config import fileConfig
+from models.audit import AuditLog
 
 # 1. СНАЧАЛА добавляем backend в PYTHONPATH, чтобы Alembic видел наши модули
 sys.path.append(str(Path(__file__).resolve().parent.parent))
