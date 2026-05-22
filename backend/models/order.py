@@ -29,7 +29,7 @@ class Order(Base):
     
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     client = relationship("User", backref="orders")
-    # 🔗 Обратная связь (опционально)
+    # Обратная связь с документом
     shipment_doc = relationship("WarehouseDocument", foreign_keys=[shipment_doc_id])
 
 class OrderItem(Base):

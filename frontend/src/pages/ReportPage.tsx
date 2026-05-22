@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react'
-import { inventory, catalog } from '../api/wms'
+import { inventory } from '../api/wms'
 import { Package, TrendingUp, AlertTriangle, CheckCircle } from 'lucide-react'
 
+// 🔧 ИСПРАВЛЕННЫЙ ИНТЕРФЕЙС (поля как в бэкенде)
 interface StockItem {
-  product_sku: string
-  product_name: string
+  sku: string
+  name: string
+  category: string | null
   quantity: number
+  min_stock?: number
+  max_stock?: number
+  status?: string
 }
 
 export default function ReportPage() {
@@ -16,23 +21,12 @@ export default function ReportPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        // Пробуем получить данные из нового эндпоинта
         const data = await inventory.report()
         setReport(Array.isArray(data) ? data : [])
         setError(null)
       } catch (err: any) {
         console.error('Report error:', err)
-        setError('Не удалось загрузить данные. Проверьте подключение к серверу.')
-        // Fallback: пробуем получить товары как запасной вариант
-        try {
-          const products = await catalog.products()
-          const fallback = (products as any[]).map((p: any) => ({
-            product_sku: p.sku,
-            product_name: p.name,
-            quantity: 0 // нет данных об остатках
-          }))
-          setReport(fallback)
-        } catch {}
+        setError('Не удалось загрузить данные: ' + err.message)
       } finally {
         setIsLoading(false)
       }
@@ -41,12 +35,15 @@ export default function ReportPage() {
   }, [])
 
   const totalItems = report.reduce((sum, item) => sum + (item.quantity || 0), 0)
-  const lowStock = report.filter(i => (i.quantity || 0) < 10).length
-  const outOfStock = report.filter(i => (i.quantity || 0) === 0).length
+  const lowStock = report.filter(i => i.status === 'low' || i.status === 'critical').length
+  const outOfStock = report.filter(i => i.status === 'critical').length
 
-  const getStatusBadge = (qty: number) => {
-    if (qty === 0) return <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">Нет в наличии</span>
-    if (qty < 10) return <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Мало: {qty} шт.</span>
+  const getStatusBadge = (item: StockItem) => {
+    const qty = item.quantity || 0
+    if (item.status === 'critical' || qty === 0) 
+      return <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">Нет в наличии</span>
+    if (item.status === 'low' || (item.min_stock && qty < item.min_stock)) 
+      return <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">Мало: {qty} шт.</span>
     return <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">В наличии: {qty} шт.</span>
   }
 
@@ -123,11 +120,12 @@ export default function ReportPage() {
               <tbody className="divide-y divide-gray-200">
                 {report.map((item, idx) => (
                   <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-sm text-gray-700">{item.product_sku}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900">{item.product_name}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">—</td>
-                    <td className="px-4 py-3 font-semibold">{item.quantity}</td>
-                    <td className="px-4 py-3">{getStatusBadge(item.quantity)}</td>
+                    {/* 🔧 ИСПРАВЛЕНО: используем sku, name, category вместо product_* */}
+                    <td className="px-4 py-3 font-mono text-sm text-gray-700">{item.sku || '—'}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900">{item.name || 'Без названия'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{item.category || '—'}</td>
+                    <td className="px-4 py-3 font-semibold">{item.quantity ?? 0}</td>
+                    <td className="px-4 py-3">{getStatusBadge(item)}</td>
                   </tr>
                 ))}
               </tbody>

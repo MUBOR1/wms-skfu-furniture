@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
+from datetime import datetime
 from enum import Enum
 
 class DocType(str, Enum):
@@ -32,6 +33,7 @@ class DocumentResponse(BaseModel):
     status: str
     operator_id: int
     comment: Optional[str] = None
+    created_at: datetime  # ← Поле для даты
     
-    class Config:
-        from_attributes = True
+    # ✅ ТОЛЬКО model_config (старый class Config УДАЛЁН!)
+    model_config = ConfigDict(from_attributes=True)

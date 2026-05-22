@@ -80,8 +80,8 @@ export default function DashboardPage() {
               {lowStockItems.map((item, i) => (
                 <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                   <div>
-                    <p className="font-medium text-sm">{item.product_name}</p>
-                    <p className="text-xs text-gray-500">{item.product_sku}</p>
+                    <p className="font-medium text-sm">{item.name || 'Без названия'}</p>
+                    <p className="text-xs text-gray-500">{item.sku || '—'}</p>
                   </div>
                   <span className={`px-2 py-1 rounded text-xs font-medium ${item.quantity === 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
                     {item.quantity === 0 ? 'Нет в наличии' : `${item.quantity} шт.`}

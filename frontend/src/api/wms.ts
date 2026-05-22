@@ -96,7 +96,17 @@ export const orders = {
 
 export const analytics = {
   dashboardStats: (days: number = 30) => request(`/analytics/dashboard-stats?days=${days}`),
-  stockReport: () => request('/analytics/stock-report'),
+  stockReport: () => request<Array<{
+  sku: string;
+  name: string;
+  category: string | null;
+  purchase_price: number;
+  sale_price: number;
+  quantity: number;
+  min_stock: number;
+  max_stock: number;
+  status: 'critical' | 'low' | 'normal' | 'overstock';
+}>>('/analytics/stock-report'),
 }
 
 export const audit = {

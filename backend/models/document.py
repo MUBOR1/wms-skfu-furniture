@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Enum, ForeignKey, Text, func
 from sqlalchemy.sql import func
 from database import Base
 import enum
@@ -24,6 +24,7 @@ class WarehouseDocument(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     operator_id = Column(Integer, nullable=True)
     comment = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class DocumentItem(Base):
     __tablename__ = "document_items"

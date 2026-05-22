@@ -23,9 +23,19 @@ export default function AnalyticsPage() {
           analytics.dashboardStats(period),
           analytics.stockReport()
         ])
+        
+        // 🔍 ОТЛАДКА: смотрим, что реально приходит с бэкенда
+        console.log('📊 stockReport raw:', stockRes)
+        if (Array.isArray(stockRes) && stockRes.length > 0) {
+          console.log('🔍 Первый элемент:', stockRes[0])
+          console.log('🔑 Ключи:', Object.keys(stockRes[0]))
+        }
+        
         setStats(statsRes)
         setStockReport(Array.isArray(stockRes) ? stockRes : [])
-      } catch (err) { console.error(err) }
+      } catch (err) { 
+        console.error('❌ Ошибка загрузки аналитики:', err) 
+      }
       finally { setIsLoading(false) }
     }
     load()
@@ -119,11 +129,12 @@ export default function AnalyticsPage() {
             {stockReport.filter((item: any) => item.status === 'critical' || item.status === 'low').slice(0, 8).map((item: any, index: number) => (
               <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
                 <div>
-                  <p className="font-medium text-sm">{item.name || 'Без названия'}</p>
-                  <p className="text-xs text-gray-500">{item.sku || '—'}</p>
+                  {/* 🔧 Безопасное отображение с резервными ключами */}
+                  <p className="font-medium text-sm">{item.name || item.product_name || 'Без названия'}</p>
+                  <p className="text-xs text-gray-500">{item.sku || item.product_sku || '—'}</p>
                 </div>
                 <span className={`px-2 py-1 rounded text-xs font-medium ${item.status === 'critical' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                  {item.quantity} / мин. {item.min_stock}
+                  {item.quantity ?? item.qty ?? 0} / мин. {item.min_stock ?? 0}
                 </span>
               </div>
             ))}
@@ -155,10 +166,11 @@ export default function AnalyticsPage() {
               <tbody className="divide-y divide-gray-200">
                 {stockReport.map((item: any, index: number) => (
                   <tr key={index} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-mono text-sm">{item.sku || '—'}</td>
-                    <td className="px-4 py-3 font-medium">{item.name || 'Без названия'}</td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{item.category || '—'}</td>
-                    <td className="px-4 py-3 font-semibold">{item.quantity ?? 0}</td>
+                    {/* 🔧 Безопасное чтение с резервными ключами */}
+                    <td className="px-4 py-3 font-mono text-sm">{item.sku || item.product_sku || '—'}</td>
+                    <td className="px-4 py-3 font-medium">{item.name || item.product_name || 'Без названия'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">{item.category || item.product_category || '—'}</td>
+                    <td className="px-4 py-3 font-semibold">{item.quantity ?? item.qty ?? 0}</td>
                     <td className="px-4 py-3 text-sm">{item.min_stock ?? 0} / {item.max_stock ?? 0}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-1 rounded text-xs font-medium ${

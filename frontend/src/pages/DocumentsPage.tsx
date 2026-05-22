@@ -2,13 +2,32 @@ import { useEffect, useState } from 'react'
 import { documents, catalog } from '../api/wms'
 import { FileText, Plus, CheckCircle, Clock, XCircle } from 'lucide-react'
 
+// 🔧 Исправленный интерфейс: created_at может быть null
 interface DocItem {
   id: number
   doc_number: string
   type: 'receive' | 'ship' | 'move' | 'adjust'
   status: 'draft' | 'in_progress' | 'completed' | 'cancelled'
-  created_at: string
+  created_at: string | null  // ← ДОБАВЛЕНО: | null
   comment: string | null
+}
+
+// 🔧 Утилита для безопасного форматирования даты
+const formatDate = (date: string | null | undefined): string => {
+  if (!date) return '—'
+  try {
+    const d = new Date(date)
+    if (isNaN(d.getTime())) return '—' // Если дата невалидна
+    return d.toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch {
+    return '—'
+  }
 }
 
 const typeLabels: Record<string, string> = {
@@ -177,7 +196,8 @@ export default function DocumentsPage() {
                         <status.icon className="w-3 h-3" /> {status.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{new Date(doc.created_at).toLocaleDateString('ru-RU')}</td>
+                    {/* 🔧 ИСПРАВЛЕНО: используем безопасную функцию formatDate */}
+                    <td className="px-4 py-3 text-sm text-gray-500">{formatDate(doc.created_at)}</td>
                     <td className="px-4 py-3">
                       {doc.status === 'draft' && (
                         <button onClick={() => handleComplete(doc.id)} 

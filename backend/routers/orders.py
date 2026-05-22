@@ -8,9 +8,9 @@ from models.user import User
 from models.order import Order, OrderItem, OrderStatus
 from models.product import Product
 from models.stock import Stock
+from models.document import WarehouseDocument, DocumentItem, DocStatus, DocType
 from schemas.orders import OrderCreate, OrderUpdate, OrderResponse
 from core.audit import log_action
-from models.document import WarehouseDocument, DocumentItem, DocStatus, DocType
 import uuid
 
 router = APIRouter(prefix="/api/orders", tags=["Заказы"])
@@ -32,46 +32,38 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db), current_user:
         db.add(order)
         db.flush()
         
-        total_amount = 0.0
+        total = 0.0
         for item in data.items:
-            product = db.query(Product).filter(Product.id == item.product_id).first()
-            if not product:
-                raise HTTPException(status_code=404, detail=f"Товар ID {item.product_id} не найден")
-            
-            # Проверка остатка (сумма по всем ячейкам)
+            # Проверка остатка
             total_available = db.query(func.sum(Stock.quantity)).filter(
                 Stock.product_id == item.product_id
             ).scalar() or 0
             
             if total_available < item.quantity:
+                product = db.query(Product).get(item.product_id)
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"Недостаточно товара '{product.name}': доступно {total_available} шт., заказано {item.quantity} шт."
+                    detail=f"Недостаточно товара: доступно {total_available} шт."
                 )
             
-            unit_price = item.unit_price if item.unit_price else float(product.sale_price or 0)
-            item_total = item.quantity * unit_price
-            total_amount += item_total
-            
+            item_total = item.quantity * item.unit_price
+            total += item_total
             db.add(OrderItem(
                 order_id=order.id, 
                 product_id=item.product_id, 
                 quantity=item.quantity, 
-                unit_price=unit_price, 
+                unit_price=item.unit_price, 
                 total_price=item_total
             ))
         
-        order.total_amount = total_amount
-        db.commit()
-        db.refresh(order)
+        order.total_amount = total
         
         log_action(db, current_user, "CREATE", "order", order.id, 
                    new_value={"order_number": order.order_number, "status": "pending"})
-        return order
         
-    except HTTPException:
-        db.rollback()
-        raise
+        db.commit()
+        db.refresh(order)
+        return order
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Заказ с таким номером уже существует")
@@ -90,19 +82,23 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: User =
         raise HTTPException(status_code=404, detail="Заказ не найден")
     return order
 
-# 🔗 НОВЫЙ ЭНДПОИНТ: Создание отгрузки на основе заказа
-@router.post("/{order_id}/create-shipment", response_model=dict)
+# 🔗 НОВЫЙ ЭНДПОИНТ: Создание отгрузки
+@router.post("/{order_id}/create-shipment")
 def create_shipment_from_order(order_id: int, db: Session = Depends(get_db), current_user: User = require_manager):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(404, "Заказ не найден")
     
     if order.status not in [OrderStatus.PENDING, OrderStatus.PROCESSING]:
-        raise HTTPException(400, "Можно создать отгрузку только для заказа в статусе pending или processing")
+        raise HTTPException(400, "Можно создать отгрузку только для заказа в статусе pending/processing")
     
     if order.shipment_doc_id:
         existing = db.query(WarehouseDocument).get(order.shipment_doc_id)
-        return {"message": "Отгрузка уже создана", "document_id": order.shipment_doc_id, "doc_number": existing.doc_number if existing else None}
+        return {
+            "message": "Отгрузка уже создана", 
+            "document_id": order.shipment_doc_id, 
+            "doc_number": existing.doc_number if existing else None
+        }
     
     # Создаём документ отгрузки
     doc_number = f"SHP-{order.order_number.replace('ORD-', '')}"
@@ -118,7 +114,7 @@ def create_shipment_from_order(order_id: int, db: Session = Depends(get_db), cur
     
     # Переносим позиции заказа в документ
     for item in order.items:
-        # Ищем первую ячейку, где есть этот товар
+        # Ищем первую ячейку с товаром
         stock = db.query(Stock).filter(
             Stock.product_id == item.product_id,
             Stock.quantity > 0
@@ -139,22 +135,76 @@ def create_shipment_from_order(order_id: int, db: Session = Depends(get_db), cur
     log_action(db, current_user, "CREATE_SHIPMENT", "order", order_id, 
                new_value={"shipment_doc_id": doc.id, "doc_number": doc_number})
     
-    return {"message": "Отгрузка создана", "document_id": doc.id, "doc_number": doc_number, "status": "draft"}
+    return {
+        "message": "Отгрузка создана", 
+        "document_id": doc.id, 
+        "doc_number": doc_number, 
+        "status": "draft"
+    }
 
 @router.patch("/{order_id}/status", response_model=OrderResponse)
-def update_status(order_id: int, data: OrderUpdate, db: Session = Depends(get_db), current_user: User = require_manager):
+def update_status(
+    order_id: int,
+    data: OrderUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     
     old_status = order.status.value if hasattr(order.status, 'value') else str(order.status)
+    new_status = data.status.value if hasattr(data.status, 'value') else str(data.status)
+    
+    # 🔙 АВТОВОЗВРАТ ПРИ ОТМЕНЕ ОТГРУЖЕННОГО ЗАКАЗА
+    if new_status == "cancelled" and old_status in ["shipped", "delivered"]:
+        if not order.shipment_doc_id:
+            raise HTTPException(400, "Не найден привязанный документ отгрузки")
+        
+        doc = db.query(WarehouseDocument).get(order.shipment_doc_id)
+        if not doc or doc.status != DocStatus.COMPLETED:
+            raise HTTPException(400, "Документ отгрузки не проведён")
+        
+        # Возвращаем товары на склад
+        doc_items = db.query(DocumentItem).filter(DocumentItem.doc_id == doc.id).all()
+        returned_items = []
+        
+        for item in doc_items:
+            product = db.query(Product).get(item.product_id)
+            if not product:
+                continue
+                
+            cell_id = item.from_cell_id
+            if not cell_id:
+                fallback = db.query(Stock).filter(Stock.product_id == item.product_id).first()
+                if fallback:
+                    cell_id = fallback.cell_id
+            
+            stock = db.query(Stock).filter(
+                Stock.product_id == item.product_id,
+                Stock.cell_id == cell_id
+            ).first()
+            
+            if not stock:
+                stock = Stock(product_id=item.product_id, cell_id=cell_id, quantity=0)
+                db.add(stock)
+                db.flush()
+            
+            stock.quantity += item.quantity
+            returned_items.append({"product": product.name, "qty": item.quantity})
+        
+        doc.status = DocStatus.CANCELLED
+        doc.comment = (doc.comment or "") + f" | Возврат при отмене заказа {order.order_number}"
+        
+        log_action(db, current_user, "CANCEL_SHIPMENT", "document", doc.id,
+                   new_value={"status": "cancelled", "returned": returned_items})
+    
     order.status = data.status
     if data.comment is not None:
         order.comment = data.comment
     
     log_action(db, current_user, "UPDATE_STATUS", "order", order_id,
-               old_value={"status": old_status},
-               new_value={"status": data.status.value if hasattr(data.status, 'value') else str(data.status)})
+               old_value={"status": old_status}, new_value={"status": new_status})
     
     db.commit()
     db.refresh(order)
