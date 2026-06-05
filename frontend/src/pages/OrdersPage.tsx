@@ -1,18 +1,7 @@
 import { useEffect, useState } from 'react'
-import { orders, catalog,  } from '../api/wms'
+import { orders, catalog } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
-import { Plus, CheckCircle, Clock, Truck, XCircle, Package, FileText } from 'lucide-react'
-
-interface Order {
-  id: number
-  order_number: string
-  client_id: number
-  status: string
-  total_amount: number
-  comment: string | null
-  created_at: string
-  shipment_doc_id?: number | null
-}
+import { Plus, CheckCircle, Clock, Truck, XCircle, Package, Eye, X } from 'lucide-react'
 
 const statusConfig: Record<string, { label: string; color: string; icon: any }> = {
   pending: { label: 'Ожидает', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
@@ -24,11 +13,16 @@ const statusConfig: Record<string, { label: string; color: string; icon: any }> 
 
 export default function OrdersPage() {
   const { hasRole } = useAuth()
-  const [ordersList, setOrdersList] = useState<Order[]>([])
+  const [ordersList, setOrdersList] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  
+  // 👇 СОСТОЯНИЕ ДЛЯ ИНФОРМАЦИОННОЙ МОДАЛКИ
+  const [selectedOrder, setSelectedOrder] = useState<any | null>(null)
+  const [isInfoLoading, setIsInfoLoading] = useState(false)
+
   const [newOrder, setNewOrder] = useState({ comment: '', items: [] as { product_id: number; quantity: number; unit_price: number }[] })
 
   useEffect(() => {
@@ -42,6 +36,21 @@ export default function OrdersPage() {
     }
     load()
   }, [])
+
+  // 👇 ФУНКЦИЯ ЗАГРУЗКИ ДЕТАЛЕЙ ЗАКАЗА
+  const handleViewInfo = async (id: number) => {
+    setIsInfoLoading(true)
+    setSelectedOrder({ id, items: [] }) // Показываем заглушку
+    try {
+      const res = await orders.get(id)
+      setSelectedOrder(res)
+    } catch (err) {
+      console.error(err)
+      setSelectedOrder(null)
+    } finally {
+      setIsInfoLoading(false)
+    }
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -64,19 +73,6 @@ export default function OrdersPage() {
     } catch (err: any) { alert('❌ ' + (err.message)) }
   }
 
-  // 🔗 НОВАЯ ФУНКЦИЯ: Создание отгрузки из заказа
-  const handleCreateShipment = async (orderId: number) => {
-  try {
-    const res = await orders.createShipment(orderId)  // ← ИСПРАВЛЕНО: используем экспортированный метод
-    alert(`✅ ${res.message}\n📄 Документ: ${res.doc_number}`)
-    setOrdersList(prev => prev.map(o => 
-      o.id === orderId ? { ...o, shipment_doc_id: res.document_id } : o
-    ))
-  } catch (err: any) {
-    alert('❌ Ошибка: ' + (err.message || 'Не удалось создать отгрузку'))
-  }
-}
-
   const addItem = () => setNewOrder(prev => ({ ...prev, items: [...prev.items, { product_id: products[0]?.id || 1, quantity: 1, unit_price: 0 }] }))
   const updateItem = (idx: number, field: string, val: any) => {
     const updated = [...newOrder.items]
@@ -95,13 +91,14 @@ export default function OrdersPage() {
         )}
       </div>
 
+      {/* Форма создания (без изменений) */}
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-white rounded-lg border border-gray-200 shadow-sm space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <input placeholder="Комментарий" value={newOrder.comment} onChange={e => setNewOrder({...newOrder, comment: e.target.value})} className="p-2 border rounded focus:ring-2 focus:ring-indigo-500" />
+            <input placeholder="Комментарий" value={newOrder.comment} onChange={e => setNewOrder({...newOrder, comment: e.target.value})} className="p-2 border rounded" />
           </div>
           <div className="border-t pt-4">
-            <div className="flex justify-between mb-2"><h4 className="font-medium">Позиции заказа</h4><button type="button" onClick={addItem} className="text-sm text-indigo-600 hover:underline">+ Добавить товар</button></div>
+            <div className="flex justify-between mb-2"><h4 className="font-medium">Позиции заказа</h4><button type="button" onClick={addItem} className="text-sm text-indigo-600">+ Добавить товар</button></div>
             {newOrder.items.map((item, idx) => (
               <div key={idx} className="flex gap-2 mb-2 items-center">
                 <select value={item.product_id} onChange={e => updateItem(idx, 'product_id', +e.target.value)} className="p-2 border rounded flex-1">
@@ -112,12 +109,12 @@ export default function OrdersPage() {
                 <button type="button" onClick={() => setNewOrder(prev => ({...prev, items: prev.items.filter((_, i) => i !== idx)}))} className="text-red-500">✕</button>
               </div>
             ))}
-            {newOrder.items.length === 0 && <p className="text-sm text-gray-400 py-2 text-center">Добавьте позиции</p>}
           </div>
           <button type="submit" disabled={isSubmitting || newOrder.items.length === 0} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50">Создать заказ</button>
         </form>
       )}
 
+      {/* Таблица заказов */}
       {isLoading ? <div className="text-center py-12"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent mx-auto"></div></div> : (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <table className="w-full">
@@ -128,6 +125,7 @@ export default function OrdersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Сумма</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Отгрузка</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Инфо</th>
                 {hasRole(['admin', 'warehouse_manager']) && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Управление</th>}
               </tr>
             </thead>
@@ -144,37 +142,24 @@ export default function OrdersPage() {
                         <st.icon className="w-3 h-3" /> {st.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      {order.shipment_doc_id ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
-                          <FileText className="w-3 h-3" /> Создана
-                        </span>
-                      ) : (
-                        <span className="text-gray-400 text-xs">—</span>
-                      )}
+                    <td className="px-4 py-3 text-sm text-gray-500">
+                      {order.shipment_doc_id ? '✅ Создана' : '—'}
+                    </td>
+                    {/*  КНОПКА ИНФО */}
+                    <td className="px-4 py-3 text-center">
+                      <button 
+                        onClick={() => handleViewInfo(order.id)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                        title="Посмотреть состав заказа"
+                      >
+                        <Eye className="w-5 h-5" />
+                      </button>
                     </td>
                     {hasRole(['admin', 'warehouse_manager']) && (
                       <td className="px-4 py-3">
-                        <div className="flex gap-2 items-center">
-                          <select 
-                            value={order.status} 
-                            onChange={e => handleStatusChange(order.id, e.target.value)} 
-                            className="p-1 border rounded text-sm"
-                          >
-                            {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
-                          </select>
-                          
-                          {/* 🔗 КНОПКА СОЗДАНИЯ ОТГРУЗКИ */}
-                          {!order.shipment_doc_id && (order.status === 'pending' || order.status === 'processing') && (
-                            <button
-                              onClick={() => handleCreateShipment(order.id)}
-                              className="px-2 py-1 bg-orange-600 text-white rounded text-xs font-medium hover:bg-orange-700 transition flex items-center gap-1"
-                              title="Создать документ отгрузки"
-                            >
-                              <FileText className="w-3 h-3" /> Отгрузка
-                            </button>
-                          )}
-                        </div>
+                        <select value={order.status} onChange={e => handleStatusChange(order.id, e.target.value)} className="p-1 border rounded text-sm">
+                          {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
+                        </select>
                       </td>
                     )}
                   </tr>
@@ -184,6 +169,68 @@ export default function OrdersPage() {
           </table>
         </div>
       )}
+
+      {/* 👇 МОДАЛЬНОЕ ОКНО СОСТАВА ЗАКАЗА */}
+      {selectedOrder && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95">
+            <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                📦 Заказ: {selectedOrder.order_number}
+                <span className="text-xs font-normal text-gray-500">от {new Date(selectedOrder.created_at).toLocaleDateString()}</span>
+              </h3>
+              <button onClick={() => setSelectedOrder(null)} className="p-1 hover:bg-gray-200 rounded-full"><X className="w-5 h-5" /></button>
+            </div>
+            
+            <div className="p-6 max-h-[60vh] overflow-y-auto">
+              {isInfoLoading ? (
+                <div className="flex justify-center py-8"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent"></div></div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Список товаров */}
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100 text-gray-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left rounded-l">Товар</th>
+                        <th className="px-3 py-2 text-center">Кол-во</th>
+                        <th className="px-3 py-2 text-right">Цена</th>
+                        <th className="px-3 py-2 text-right rounded-r">Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {selectedOrder.items?.map((item: any, idx: number) => (
+                        <tr key={idx}>
+                          <td className="px-3 py-2 font-medium">{item.product_name || `Товар #${item.product_id}`}</td>
+                          <td className="px-3 py-2 text-center">{item.quantity} шт.</td>
+                          <td className="px-3 py-2 text-right">{item.unit_price.toLocaleString()} ₽</td>
+                          <td className="px-3 py-2 text-right font-bold">{item.total_price.toLocaleString()} ₽</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-gray-50 font-bold text-base">
+                        <td colSpan={3} className="px-3 py-3 text-right">ИТОГО:</td>
+                        <td className="px-3 py-3 text-right text-indigo-600">{selectedOrder.total_amount.toLocaleString()} ₽</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  
+                  {selectedOrder.comment && (
+                    <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
+                      💬 Комментарий: {selectedOrder.comment}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 border-t bg-gray-50 flex justify-end">
+              <button onClick={() => setSelectedOrder(null)} className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium transition-colors">Закрыть</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

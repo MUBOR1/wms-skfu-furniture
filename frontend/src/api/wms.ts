@@ -3,7 +3,6 @@ const API_BASE = '/api'
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem('wms_token')
   
-  // Безопасно собираем заголовки
   const headers = new Headers(options.headers as HeadersInit)
   headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -26,12 +25,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   return res.json() as Promise<T>
 }
-export interface ShipmentResponse {
-  message: string
-  document_id: number
-  doc_number: string
-  status: string
-}
+
 // 👇 ЭКСПОРТИРУЕМ ФУНКЦИЮ REQUEST
 export { request }
 
@@ -56,7 +50,6 @@ export const catalog = {
       weight_kg: number; 
       min_stock: number; 
       max_stock: number;
-      // 👇 ДОБАВЛЕНЫ ЦЕНЫ
       purchase_price: number;
       sale_price: number;
     }>>(`/catalog/products${search ? `?search=${search}` : ''}`),
@@ -66,13 +59,36 @@ export const catalog = {
     body: JSON.stringify(data) 
   }),
   
+  // 👇 НОВЫЕ МЕТОДЫ:
+  updateProduct: (id: number, data: any) => request(`/catalog/products/${id}`, { 
+    method: 'PUT', 
+    body: JSON.stringify(data) 
+  }),
+  
+  deleteProduct: (id: number) => request(`/catalog/products/${id}`, { method: 'DELETE' }),
+  
+  categories: () => request<string[]>('/catalog/categories'),
+  
   zones: () => request('/catalog/zones'),
   cells: (zoneId?: number) => request(`/catalog/cells${zoneId ? `?zone_id=${zoneId}` : ''}`),
 }
 
 export const documents = {
+  // 👇 ПРОСТОЙ СПИСОК БЕЗ ТИПА
   list: () => request('/documents/'),
+  
+  // 👇 getDoc возвращает any (просто для работы)
+  getDoc: (id: number) => request(`/documents/${id}`),
+  
   create: (data: any) => request('/documents/', { method: 'POST', body: JSON.stringify(data) }),
+  
+  // 👇 update и delete тоже без сложных типов
+  update: (id: number, data: any) => request(`/documents/${id}`, { 
+    method: 'PUT', 
+    body: JSON.stringify(data) 
+  }),
+  delete: (id: number) => request(`/documents/${id}`, { method: 'DELETE' }),
+  
   complete: (id: number) => request(`/documents/${id}/complete`, { method: 'POST' }),
 }
 
@@ -81,7 +97,6 @@ export const inventory = {
   create: (data: any) => request('/inventory/', { method: 'POST', body: JSON.stringify(data) }),
   get: (id: number) => request(`/inventory/${id}`),
   complete: (id: number) => request(`/inventory/${id}/complete`, { method: 'POST' }),
-  // ← ИСПРАВЛЕНО: используем рабочий эндпоинт из analytics
   report: () => request('/analytics/stock-report'),
 }
 
@@ -90,23 +105,11 @@ export const orders = {
   create: (data: any) => request('/orders/', { method: 'POST', body: JSON.stringify(data) }),
   get: (id: number) => request(`/orders/${id}`),
   updateStatus: (id: number, status: string) => request(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
-  // 👇 ИСПРАВЛЕНО: добавлен тип возврата
-  createShipment: (orderId: number) => request<ShipmentResponse>(`/orders/${orderId}/create-shipment`, { method: 'POST' }),
 }
 
 export const analytics = {
   dashboardStats: (days: number = 30) => request(`/analytics/dashboard-stats?days=${days}`),
-  stockReport: () => request<Array<{
-  sku: string;
-  name: string;
-  category: string | null;
-  purchase_price: number;
-  sale_price: number;
-  quantity: number;
-  min_stock: number;
-  max_stock: number;
-  status: 'critical' | 'low' | 'normal' | 'overstock';
-}>>('/analytics/stock-report'),
+  stockReport: () => request('/analytics/stock-report'),
 }
 
 export const audit = {
@@ -116,7 +119,6 @@ export const audit = {
   },
 }
 
-// Экспорт/Импорт (используем raw fetch для работы с файлами/blob)
 export const catalogExport = async () => {
   const res = await fetch('/api/catalog/products/export', {
     headers: { Authorization: `Bearer ${localStorage.getItem('wms_token')}` }
@@ -151,6 +153,31 @@ export interface Order {
   total_amount: number
   comment: string | null
   created_at: string
-  // 🔗 ДОБАВЛЕНО:
   shipment_doc_id?: number | null
+  items?: { // инфо о заказах
+    id: number
+    product_id: number
+    quantity: number
+    unit_price: number
+    total_price: number
+    product_name: string | null
+  }[]
+}
+
+export interface DocumentDetails {
+  id: number
+  doc_number: string
+  type: string
+  status: string
+  created_at: string | null
+  comment: string | null
+  items: Array<{
+    id: number
+    product_id: number
+    product_name?: string
+    product_sku?: string
+    quantity: number
+    from_cell_id?: number
+    to_cell_id?: number
+  }>
 }

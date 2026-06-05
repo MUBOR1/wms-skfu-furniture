@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from database import get_db
@@ -77,9 +77,14 @@ def list_orders(db: Session = Depends(get_db), current_user: User = require_work
 
 @router.get("/{order_id}", response_model=OrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db), current_user: User = require_worker):
-    order = db.query(Order).filter(Order.id == order_id).first()
+    order = db.query(Order)\
+        .options(joinedload(Order.items).joinedload(OrderItem.product))\
+        .filter(Order.id == order_id)\
+        .first()
+        
     if not order:
         raise HTTPException(status_code=404, detail="Заказ не найден")
+    
     return order
 
 # 🔗 НОВЫЙ ЭНДПОИНТ: Создание отгрузки

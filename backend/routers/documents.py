@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from database import get_db
 from core.permissions import require_manager, require_worker
@@ -54,6 +54,39 @@ def create_document(data: DocumentCreate, db: Session = Depends(get_db), current
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
+    
+@router.get("/{doc_id}")
+def get_document_details(doc_id: int, db: Session = Depends(get_db), user: User = require_worker):
+    doc = db.query(WarehouseDocument).filter(WarehouseDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(404, "Документ не найден")
+    
+    # Загружаем позиции отдельно с товарами
+    doc_items = db.query(DocumentItem).join(Product).filter(
+        DocumentItem.doc_id == doc_id
+    ).all()
+    
+    # Возвращаем документ + позиции с названиями товаров
+    return {
+        "id": doc.id,
+        "doc_number": doc.doc_number,
+        "type": doc.type,
+        "status": doc.status,
+        "created_at": doc.created_at,
+        "comment": doc.comment,
+        "items": [
+            {
+                "id": item.id,
+                "product_id": item.product_id,
+                "product_name": item.product.name if item.product else f"Товар #{item.product_id}",
+                "product_sku": item.product.sku if item.product else None,
+                "quantity": item.quantity,
+                "from_cell_id": item.from_cell_id,
+                "to_cell_id": item.to_cell_id
+            }
+            for item in doc_items
+        ]
+    }
 
 @router.get("/", response_model=list[DocumentResponse])
 def list_documents(db: Session = Depends(get_db), current_user: User = require_worker):
@@ -159,3 +192,80 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
         db.rollback()
         print(f"🔴 COMPLETE ERROR:\n{str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+# === РЕДАКТИРОВАНИЕ ДОКУМЕНТА ===
+@router.put("/{doc_id}", response_model=DocumentResponse)
+def update_document(
+    doc_id: int,
+    data: DocumentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
+    try:
+        doc = db.query(WarehouseDocument).filter(WarehouseDocument.id == doc_id).first()
+        if not doc:
+            raise HTTPException(404, "Документ не найден")
+        if doc.status != DocStatus.DRAFT:
+            raise HTTPException(400, "Можно редактировать только черновики")
+        
+        # Обновляем основные поля
+        doc.type = data.type
+        doc.comment = data.comment
+        
+        # Удаляем старые позиции
+        old_items = db.query(DocumentItem).filter(DocumentItem.doc_id == doc_id).all()
+        for item in old_items:
+            db.delete(item)
+        db.flush()
+        
+        # Добавляем новые позиции
+        for item_data in data.items:
+            db.add(DocumentItem(
+                doc_id=doc.id,
+                product_id=item_data.product_id,
+                quantity=item_data.quantity,
+                from_cell_id=item_data.from_cell_id,
+                to_cell_id=item_data.to_cell_id
+            ))
+        
+        log_action(db, current_user, "UPDATE", "document", doc_id,
+                   new_value={"doc_number": doc.doc_number, "type": doc.type})
+        
+        db.commit()
+        db.refresh(doc)
+        return doc
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+
+# === УДАЛЕНИЕ ДОКУМЕНТА ===
+@router.delete("/{doc_id}")
+def delete_document(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
+    try:
+        doc = db.query(WarehouseDocument).filter(WarehouseDocument.id == doc_id).first()
+        if not doc:
+            raise HTTPException(404, "Документ не найден")
+        if doc.status != DocStatus.DRAFT:
+            raise HTTPException(400, "Можно удалять только черновики")
+        
+        # Сначала удаляем позиции
+        items = db.query(DocumentItem).filter(DocumentItem.doc_id == doc_id).all()
+        for item in items:
+            db.delete(item)
+        
+        # Затем сам документ
+        db.delete(doc)
+        
+        log_action(db, current_user, "DELETE", "document", doc_id,
+                   new_value={"doc_number": doc.doc_number})
+        
+        db.commit()
+        return {"message": "Документ удалён"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    

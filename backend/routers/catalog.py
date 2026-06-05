@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from core.security import get_current_user
 from core.permissions import require_worker, require_manager
-from core.audit import log_action  # ← ИМПОРТ В НАЧАЛЕ ФАЙЛА
+from core.audit import log_action
 from models.user import User
 from models.zone import Zone
 from models.cell import Cell
@@ -51,7 +51,7 @@ def list_cells(zone_id: int = Query(None), db: Session = Depends(get_db), _: Use
 @router.post("/products", response_model=ProductResponse)
 def create_product(data: ProductCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     try:
-        # Явное создание объекта с ЦЕНАМИ
+        # 1. Создаём объект
         product = Product(
             sku=data.sku,
             name=data.name,
@@ -61,17 +61,30 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db), current_u
             weight_kg=data.weight_kg,
             volume_m3=data.volume_m3,
             barcode=data.barcode,
-            purchase_price=data.purchase_price,  # ← ДОБАВЛЕНО
-            sale_price=data.sale_price,           # ← ДОБАВЛЕНО
+            purchase_price=data.purchase_price,
+            sale_price=data.sale_price,
             min_stock=data.min_stock,
             max_stock=data.max_stock
         )
         db.add(product)
+        
+        # 2. Flush отправляет данные в БД (появляется ID), но транзакция остаётся открытой
+        db.flush()
+        
+        # 3. Логируем ДО коммита
+        log_action(
+            db=db,
+            user=current_user,
+            action="CREATE",
+            entity_type="product",
+            entity_id=product.id,
+            new_value={"sku": product.sku, "name": product.name, "sale_price": float(product.sale_price or 0)}
+        )
+        
+        # 4. Коммитим всё вместе: и товар, и лог
         db.commit()
         db.refresh(product)
         
-        log_action(db, current_user, "CREATE", "product", product.id, 
-                   new_value={"sku": product.sku, "name": product.name, "sale_price": product.sale_price})
         return product
     except Exception as e:
         db.rollback()
@@ -146,3 +159,80 @@ async def import_products(
         return {"status": "success", "created": created, "updated": updated}
     db.rollback()
     return {"status": "errors", "created": created, "updated": updated, "errors": errors[:10]}
+
+# === ФИЛЬТР ПО КАТЕГОРИЯМ ===
+@router.get("/categories", response_model=list[str])
+def get_categories(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    categories = db.query(Product.category).filter(Product.is_active == True, Product.category.isnot(None)).distinct().all()
+    return [c[0] for c in categories if c[0]]
+
+# === РЕДАКТИРОВАНИЕ ТОВАРА ===
+@router.put("/products/{product_id}", response_model=ProductResponse)
+def update_product(
+    product_id: int, 
+    data: ProductUpdate, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        product = db.query(Product).filter(Product.id == product_id).first()
+        if not product:
+            raise HTTPException(404, detail="Товар не найден")
+        
+        # Сохраняем старые значения для лога
+        old_value = {
+            "name": product.name,
+            "sku": product.sku,
+            "sale_price": float(product.sale_price or 0)
+        }
+        
+        # Обновляем поля
+        update_data = data.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(product, key, value)
+            
+        db.commit()
+        db.refresh(product)
+        
+        log_action(
+            db=db,
+            user=current_user,
+            action="UPDATE",
+            entity_type="product",
+            entity_id=product_id,
+            old_value=old_value,
+            new_value={"name": product.name, "sku": product.sku, "sale_price": float(product.sale_price or 0)}
+        )
+        return product
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+
+# === УДАЛЕНИЕ ТОВАРА ===
+@router.delete("/products/{product_id}")
+def delete_product(
+    product_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        product = db.query(Product).filter(Product.id == product_id).first()
+        if not product:
+            raise HTTPException(404, detail="Товар не найден")
+        
+        # Мягкое удаление: ставим флаг is_active = False
+        product.is_active = False
+        db.commit()
+        
+        log_action(
+            db=db,
+            user=current_user,
+            action="DELETE",
+            entity_type="product",
+            entity_id=product_id,
+            new_value={"sku": product.sku, "name": product.name}
+        )
+        return {"message": "Товар удалён"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))

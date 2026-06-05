@@ -36,4 +36,5 @@ class OrderResponse(BaseModel):
     created_at: datetime
     items: List[OrderItemResponse] = []
     shipment_doc_id: Optional[int] = None
+    items: List[OrderItemResponse] = []
     model_config = ConfigDict(from_attributes=True)
