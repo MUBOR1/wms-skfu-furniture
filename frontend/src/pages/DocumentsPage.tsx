@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { documents, catalog } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
-import { FileText, Plus, CheckCircle, Clock, XCircle, Eye, Edit2, Trash2, X, Save } from 'lucide-react'
+import { 
+  FileText, Plus, CheckCircle, Clock, XCircle, Eye, Edit2, Trash2, X, Save, 
+  Search, Filter, Calendar, XCircle as XIcon 
+} from 'lucide-react'
 
-const formatDate = (date: string | null | undefined): string => {
+// 🔧 Форматирование даты для отображения в таблице (время)
+const formatTime = (date: string | null | undefined): string => {
   if (!date) return '—'
   try {
-    const d = new Date(date)
-    if (isNaN(d.getTime())) return '—'
-    return d.toLocaleDateString('ru-RU', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    })
-  } catch {
-    return '—'
-  }
+    return new Date(date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  } catch { return '—' }
+}
+
+// 🔧 Форматирование даты для группировки (ключ)
+const formatDateKey = (date: string | null | undefined): string => {
+  if (!date) return 'Неизвестно'
+  try {
+    return new Date(date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  } catch { return 'Неизвестно' }
 }
 
 interface DocItem {
@@ -36,9 +41,10 @@ interface Cell {
 const typeLabels: Record<string, string> = {
   receive: '📥 Приёмка', 
   ship: '📤 Отгрузка', 
-  transfer: '🔄 Перемещение',  // ← ИЗМЕНЕНО
+  transfer: '🔄 Перемещение',
   adjust: '⚙️ Корректировка'
 }
+
 const statusConfig: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   draft: { label: 'Черновик', color: 'bg-gray-100 text-gray-700', icon: Clock },
   in_progress: { label: 'В работе', color: 'bg-blue-100 text-blue-700', icon: Clock },
@@ -46,21 +52,14 @@ const statusConfig: Record<string, { label: string; color: string; icon: React.E
   cancelled: { label: 'Отменён', color: 'bg-red-100 text-red-700', icon: XCircle },
 }
 
-// 🔧 Вспомогательная функция для безопасного отображения ошибок
-const getErrorMessage = (err: any): string => {
-  console.error('🔴 Full error:', err) // ← Показываем полную ошибку в консоли
-  
-  if (typeof err === 'string') return err
-  if (err?.message) return err.message
-  if (err?.detail) {
-    // Если detail это объект, преобразуем в строку
-    return typeof err.detail === 'object' 
-      ? JSON.stringify(err.detail) 
-      : err.detail
-  }
-  if (err?.response?.data?.detail) return err.response.data.detail
-  return 'Неизвестная ошибка. Проверьте консоль (F12)'
-}
+// Список типов для фильтра
+const documentTypes = [
+  { value: 'all', label: 'Все типы' },
+  { value: 'receive', label: '📥 Приёмка' },
+  { value: 'ship', label: '📤 Отгрузка' },
+  { value: 'transfer', label: '🔄 Перемещение' },
+  { value: 'adjust', label: '⚙️ Корректировка' },
+]
 
 export default function DocumentsPage() {
   const { hasRole } = useAuth()
@@ -68,25 +67,27 @@ export default function DocumentsPage() {
   const [products, setProducts] = useState<any[]>([])
   const [cells, setCells] = useState<Cell[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  
+  // Состояния формы
   const [showForm, setShowForm] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  
-  // 🔧 Убрали "as const" чтобы TypeScript разрешал смену типа
-  const [newDoc, setNewDoc] = useState({ type: 'receive', comment: '' })
+  const [newDoc, setNewDoc] = useState({ type: 'receive', comment: '' }) 
   const [docItems, setDocItems] = useState<Array<{ 
-    product_id: number
-    quantity: number
-    from_cell_id?: number
-    to_cell_id?: number 
+    product_id: number; quantity: number; from_cell_id?: number; to_cell_id?: number 
   }>>([])
   
-  // Для просмотра
+  // Для просмотра и редактирования
   const [selectedDoc, setSelectedDoc] = useState<any | null>(null)
   const [isDetailsLoading, setIsDetailsLoading] = useState(false)
-  
-  // Для редактирования
   const [editingDoc, setEditingDoc] = useState<any | null>(null)
   const [editItems, setEditItems] = useState<any[]>([])
+
+  // 🔍 ФИЛЬТРЫ И ПОИСК
+  const [searchQuery, setSearchQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [showFilters, setShowFilters] = useState(false)
 
   const loadDocs = async () => {
     try {
@@ -112,6 +113,77 @@ export default function DocumentsPage() {
   useEffect(() => { 
     Promise.all([loadDocs(), loadProducts(), loadCells()]).finally(() => setIsLoading(false))
   }, [])
+
+  // 🔧 ФИЛЬТРАЦИЯ И ГРУППИРОВКА
+  const filteredAndGroupedDocs = useMemo(() => {
+    let filtered = [...docs]
+    
+    // Поиск по номеру
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      filtered = filtered.filter(d => d.doc_number?.toLowerCase().includes(q))
+    }
+    
+    // Фильтр по типу
+    if (typeFilter !== 'all') {
+      filtered = filtered.filter(d => d.type === typeFilter)
+    }
+    
+    // Фильтр по датам
+    if (dateFrom) {
+      const from = new Date(dateFrom)
+      filtered = filtered.filter(d => d.created_at && new Date(d.created_at) >= from)
+    }
+    if (dateTo) {
+      const to = new Date(dateTo)
+      to.setHours(23, 59, 59, 999)
+      filtered = filtered.filter(d => d.created_at && new Date(d.created_at) <= to)
+    }
+    
+    // Сортировка: новые сверху
+    filtered.sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
+      return dateB - dateA
+    })
+    
+    // Группировка по датам
+    const grouped: Record<string, DocItem[]> = {}
+    for (const doc of filtered) {
+      const dateKey = formatDateKey(doc.created_at)
+      if (!grouped[dateKey]) grouped[dateKey] = []
+      grouped[dateKey].push(doc)
+    }
+    
+    return grouped
+  }, [docs, searchQuery, typeFilter, dateFrom, dateTo])
+
+  // Сброс фильтров
+  const resetFilters = () => {
+    setSearchQuery('')
+    setTypeFilter('all')
+    setDateFrom('')
+    setDateTo('')
+  }
+
+  const activeFiltersCount = [
+    searchQuery.trim(),
+    typeFilter !== 'all',
+    dateFrom,
+    dateTo
+  ].filter(Boolean).length
+
+  // 🔧 Вспомогательная функция для безопасного отображения ошибок
+  const getErrorMessage = (err: any): string => {
+    console.error('🔴 Full error:', err)
+    if (typeof err === 'string') return err
+    if (err?.message) return err.message
+    if (err?.detail) {
+      return typeof err.detail === 'object' ? JSON.stringify(err.detail) : err.detail
+    }
+    if (err?.response?.data?.detail) return err.response.data.detail
+    return 'Неизвестная ошибка. Проверьте консоль (F12)'
+  }
 
   const handleViewDetails = async (id: number) => {
     setIsDetailsLoading(true)
@@ -202,80 +274,172 @@ export default function DocumentsPage() {
     }
   }
 
-  // 🔧 УМНАЯ ФУНКЦИЯ: автоподстановка ячеек в зависимости от типа документа
   const getDefaultCells = (docType: string) => {
     if (docType === 'receive') {
-      // Приёмка: автоматически ставим ячейку приёмки (REC-*) или первую доступную
       const receivingCell = cells.find(c => c.code.toUpperCase().includes('REC')) || cells[0]
       return { from_cell_id: undefined, to_cell_id: receivingCell?.id }
     }
     else if (docType === 'ship') {
-      // Отгрузка: нужно выбрать откуда (валидация на бэкенде)
       return { from_cell_id: cells[0]?.id, to_cell_id: undefined }
     }
     else if (docType === 'transfer') {
-      // Перемещение: две разные ячейки
       return { from_cell_id: cells[0]?.id, to_cell_id: cells[1]?.id }
     }
     else if (docType === 'adjust') {
-      // Корректировка: только целевая ячейка
       return { from_cell_id: undefined, to_cell_id: cells[0]?.id }
     }
     return { from_cell_id: undefined, to_cell_id: undefined }
   }
 
   const addDocItem = () => {
-    const baseItem = { 
-      product_id: products[0]?.id || 1, 
-      quantity: 1,
-      ...getDefaultCells(newDoc.type)
-    }
+    const baseItem = { product_id: products[0]?.id || 1, quantity: 1, ...getDefaultCells(newDoc.type) }
     setDocItems(prev => [...prev, baseItem])
   }
   
   const addEditItem = () => {
-    const baseItem = { 
-      product_id: products[0]?.id || 1, 
-      quantity: 1,
-      ...getDefaultCells(editingDoc?.type)
-    }
+    const baseItem = { product_id: products[0]?.id || 1, quantity: 1, ...getDefaultCells(editingDoc?.type) }
     setEditItems(prev => [...prev, baseItem])
   }
   
   const updateDocItem = (idx: number, field: string, value: any) => {
-    setDocItems(prev => { 
-      const u = [...prev]
-      u[idx] = { ...u[idx], [field]: value }
-      return u 
-    })
+    setDocItems(prev => { const u = [...prev]; u[idx] = { ...u[idx], [field]: value }; return u })
   }
   
   const updateEditItem = (idx: number, field: string, value: any) => {
-    setEditItems(prev => { 
-      const u = [...prev]
-      u[idx] = { ...u[idx], [field]: value }
-      return u 
-    })
+    setEditItems(prev => { const u = [...prev]; u[idx] = { ...u[idx], [field]: value }; return u })
   }
 
-  // 🔧 Проверка типа документа для отображения полей
   const currentType = (editingDoc || newDoc).type
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      {/* 🔝 ЗАГОЛОВОК И КНОПКИ */}
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-gray-900">📄 Складские документы</h2>
-        {hasRole(['admin', 'warehouse_manager']) && (
-          <button onClick={() => { 
-            setShowForm(!showForm)
-            setEditingDoc(null)
-            if(!showForm) { loadProducts(); loadCells() } 
-          }} 
-                  className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-all">
-            <Plus className="w-4 h-4" /> {showForm ? 'Отмена' : 'Создать документ'}
-          </button>
-        )}
+        
+        <div className="flex items-center gap-2">
+          {hasRole(['admin', 'warehouse_manager']) && (
+            <>
+              {/* 🔍 Кнопка фильтров */}
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all border relative ${
+                  showFilters || activeFiltersCount > 0
+                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <Filter className="w-4 h-4" />
+                <span className="hidden sm:inline">Фильтры</span>
+                {activeFiltersCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-indigo-600 text-white text-xs rounded-full flex items-center justify-center">
+                    {activeFiltersCount}
+                  </span>
+                )}
+              </button>
+              
+              {/* ➕ Создать документ */}
+              <button onClick={() => { 
+                setShowForm(!showForm)
+                setEditingDoc(null)
+                if(!showForm) { loadProducts(); loadCells() } 
+              }} 
+              className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-all">
+                <Plus className="w-4 h-4" /> <span className="hidden sm:inline">{showForm ? 'Отмена' : 'Создать'}</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {/* 🔍 ПАНЕЛЬ ФИЛЬТРОВ */}
+      {showFilters && (
+        <div className="mb-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-medium text-gray-700 flex items-center gap-2">
+              <Filter className="w-4 h-4" /> Фильтры документов
+            </h4>
+            <button onClick={resetFilters} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+              <XIcon className="w-3 h-3" /> Сбросить
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* Поиск по номеру */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Поиск по номеру..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+            
+            {/* Фильтр по типу */}
+            <select 
+              value={typeFilter} 
+              onChange={e => setTypeFilter(e.target.value)}
+              className="p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+            >
+              {documentTypes.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+            
+            {/* Дата от */}
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={e => setDateFrom(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+            
+            {/* Дата до */}
+            <div className="relative">
+              <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={e => setDateTo(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+            </div>
+          </div>
+          
+          {/* Теги активных фильтров */}
+          {(searchQuery || typeFilter !== 'all' || dateFrom || dateTo) && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {searchQuery && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                  Поиск: "{searchQuery}"
+                  <button onClick={() => setSearchQuery('')} className="hover:text-red-500"><XIcon className="w-3 h-3" /></button>
+                </span>
+              )}
+              {typeFilter !== 'all' && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                  Тип: {documentTypes.find(t => t.value === typeFilter)?.label}
+                  <button onClick={() => setTypeFilter('all')} className="hover:text-red-500"><XIcon className="w-3 h-3" /></button>
+                </span>
+              )}
+              {dateFrom && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                  От: {dateFrom}
+                  <button onClick={() => setDateFrom('')} className="hover:text-red-500"><XIcon className="w-3 h-3" /></button>
+                </span>
+              )}
+              {dateTo && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                  До: {dateTo}
+                  <button onClick={() => setDateTo('')} className="hover:text-red-500"><XIcon className="w-3 h-3" /></button>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Форма создания/редактирования */}
       {(showForm || editingDoc) && (
@@ -292,7 +456,6 @@ export default function DocumentsPage() {
                   setEditingDoc({...editingDoc, type: newType})
                 } else {
                   setNewDoc({...newDoc, type: newType})
-                  // Сбрасываем items при смене типа
                   setDocItems([])
                 }
               }} 
@@ -313,7 +476,6 @@ export default function DocumentsPage() {
             />
           </div>
           
-          {/* 🔧 УМНЫЕ ПОДСКАЗКИ */}
           <div className={`p-3 rounded-lg text-sm border ${
             currentType === 'receive' ? 'bg-green-50 border-green-200 text-green-800' :
             currentType === 'ship' ? 'bg-red-50 border-red-200 text-red-800' :
@@ -336,7 +498,6 @@ export default function DocumentsPage() {
             {(editingDoc ? editItems : docItems).map((item, idx) => (
               <div key={idx} className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
-                  {/* Выбор товара */}
                   <select 
                     value={item.product_id} 
                     onChange={e => editingDoc 
@@ -347,7 +508,6 @@ export default function DocumentsPage() {
                     {products.map((p: any) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
                   </select>
                   
-                  {/* Количество */}
                   <input 
                     type="number" 
                     placeholder={currentType === 'adjust' ? "Кол-во (- для списания)" : "Кол-во"} 
@@ -359,7 +519,6 @@ export default function DocumentsPage() {
                     required 
                   />
                   
-                  {/* 🔧 FROM cell: показываем для ship и move */}
                   {(currentType === 'ship' || currentType === 'transfer') && (
                     <select 
                       value={item.from_cell_id || ''} 
@@ -367,16 +526,12 @@ export default function DocumentsPage() {
                         ? updateEditItem(idx, 'from_cell_id', +e.target.value || undefined) 
                         : updateDocItem(idx, 'from_cell_id', +e.target.value || undefined)} 
                       className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      title={currentType === 'ship' ? 'Ячейка, из которой списать товар' : 'Ячейка-источник'}
                     >
-                      <option value="">
-                        {currentType === 'ship' ? '📦 Откуда списать' : '📤 Из ячейки'}
-                      </option>
+                      <option value="">📤 Из ячейки</option>
                       {cells.map((c: Cell) => <option key={c.id} value={c.id}>📍 {c.code}</option>)}
                     </select>
                   )}
                   
-                  {/* 🔧 TO cell: показываем для receive, move, adjust */}
                   {(currentType === 'receive' || currentType === 'transfer' || currentType === 'adjust') && (
                     <select 
                       value={item.to_cell_id || ''} 
@@ -384,21 +539,16 @@ export default function DocumentsPage() {
                         ? updateEditItem(idx, 'to_cell_id', +e.target.value || undefined) 
                         : updateDocItem(idx, 'to_cell_id', +e.target.value || undefined)} 
                       className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
-                      title={currentType === 'receive' ? 'Ячейка для размещения товара' : 'Целевая ячейка'}
                     >
-                      <option value="">
-                        {currentType === 'receive' ? '📥 Куда разместить' : '📥 В ячейку'}
-                      </option>
+                      <option value="">📥 В ячейку</option>
                       {cells.map((c: Cell) => <option key={c.id} value={c.id}>📍 {c.code}</option>)}
                     </select>
                   )}
                   
-                  {/* Кнопка удаления позиции */}
                   <button type="button" onClick={() => editingDoc 
                     ? setEditItems(prev => prev.filter((_, i) => i !== idx)) 
                     : setDocItems(prev => prev.filter((_, i) => i !== idx))} 
-                          className="text-red-500 hover:text-red-700 p-2 self-center"
-                          title="Удалить позицию">✕</button>
+                          className="text-red-500 hover:text-red-700 p-2 self-center">✕</button>
                 </div>
               </div>
             ))}
@@ -416,10 +566,7 @@ export default function DocumentsPage() {
               <Save className="w-4 h-4" /> {isSubmitting ? 'Сохранение...' : (editingDoc ? 'Сохранить изменения' : 'Создать документ')}
             </button>
             <button type="button" onClick={() => { 
-              setShowForm(false)
-              setEditingDoc(null)
-              setDocItems([])
-              setEditItems([])
+              setShowForm(false); setEditingDoc(null); setDocItems([]); setEditItems([])
             }} 
                     className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors">
               Отмена
@@ -428,69 +575,90 @@ export default function DocumentsPage() {
         </form>
       )}
 
-      {/* Таблица документов */}
+      {/* 📋 СПИСОК ДОКУМЕНТОВ С ГРУППИРОВКОЙ */}
       {isLoading ? (
         <div className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div></div>
-      ) : docs.length === 0 ? (
+      ) : Object.keys(filteredAndGroupedDocs).length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-dashed border-gray-300">
           <FileText className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-          <p className="text-gray-500">Нет документов. Создайте первый!</p>
+          <p className="text-gray-500">Документы не найдены. Попробуйте изменить фильтры.</p>
+          {activeFiltersCount > 0 && (
+            <button onClick={resetFilters} className="mt-2 text-sm text-indigo-600 hover:underline">Сбросить фильтры</button>
+          )}
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">№ документа</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Тип</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Дата</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Инфо</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Действия</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {docs.map((doc) => {
-                const status = statusConfig[doc.status] || statusConfig.draft
-                const isDraft = doc.status === 'draft'
-                return (
-                  <tr key={doc.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-sm font-medium">{doc.doc_number}</td>
-                    <td className="px-4 py-3">{typeLabels[doc.type] || doc.type}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${status.color}`}>
-                        <status.icon className="w-3 h-3" /> {status.label}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">{formatDate(doc.created_at)}</td>
-                    <td className="px-4 py-3 text-center">
-                      <button onClick={() => handleViewDetails(doc.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors" title="Посмотреть содержимое">
-                        <Eye className="w-5 h-5" />
-                      </button>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-1">
-                        {isDraft && hasRole(['admin', 'warehouse_manager']) && (
-                          <>
-                            <button onClick={() => handleEdit(doc.id)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="Редактировать">
-                              <Edit2 className="w-4 h-4" />
+        <div className="space-y-6">
+          {Object.entries(filteredAndGroupedDocs).map(([dateKey, dayDocs]) => (
+            <div key={dateKey}>
+              {/* 🗓️ ЗАГОЛОВОК ДАТЫ */}
+              <div className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur-sm px-4 py-2 border-b border-gray-200 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-gray-500" />
+                <h3 className="font-semibold text-gray-700">{dateKey}</h3>
+                <span className="text-xs text-gray-400">({dayDocs.length} {dayDocs.length === 1 ? 'документ' : dayDocs.length < 5 ? 'документа' : 'документов'})</span>
+              </div>
+              
+              {/* 📄 ТАБЛИЦА ЗА ДЕНЬ */}
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase w-12">№</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">№ документа</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Тип</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Время</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Инфо</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Действия</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {dayDocs.map((doc, idx) => {
+                      const status = statusConfig[doc.status] || statusConfig.draft
+                      const isDraft = doc.status === 'draft'
+                      return (
+                        <tr key={doc.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-center text-sm text-gray-500 font-mono">
+                            {idx + 1}.
+                          </td>
+                          <td className="px-4 py-3 font-mono text-sm font-medium">{doc.doc_number}</td>
+                          <td className="px-4 py-3">{typeLabels[doc.type] || doc.type}</td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${status.color}`}>
+                              <status.icon className="w-3 h-3" /> {status.label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">{formatTime(doc.created_at)}</td>
+                          <td className="px-4 py-3 text-center">
+                            <button onClick={() => handleViewDetails(doc.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-full transition-colors" title="Посмотреть содержимое">
+                              <Eye className="w-5 h-5" />
                             </button>
-                            <button onClick={() => handleDelete(doc.id)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Удалить">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => handleComplete(doc.id)} className="ml-2 text-green-600 hover:text-green-800 text-xs font-medium hover:underline px-2 py-1">
-                              Провести
-                            </button>
-                          </>
-                        )}
-                        {!isDraft && <span className="text-gray-400 text-xs">—</span>}
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-1">
+                              {isDraft && hasRole(['admin', 'warehouse_manager']) && (
+                                <>
+                                  <button onClick={() => handleEdit(doc.id)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="Редактировать">
+                                    <Edit2 className="w-4 h-4" />
+                                  </button>
+                                  <button onClick={() => handleDelete(doc.id)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Удалить">
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                  <button onClick={() => handleComplete(doc.id)} className="ml-2 text-green-600 hover:text-green-800 text-xs font-medium hover:underline px-2 py-1">
+                                    Провести
+                                  </button>
+                                </>
+                              )}
+                              {!isDraft && <span className="text-gray-400 text-xs">—</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
