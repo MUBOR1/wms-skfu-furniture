@@ -23,7 +23,7 @@ def upgrade() -> None:
     op.create_table('warehouse_documents',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('doc_number', sa.String(length=50), nullable=False),
-    sa.Column('type', sa.Enum('RECEIVE', 'SHIP', 'MOVE', 'ADJUST', name='doctype'), nullable=False),
+    sa.Column('type', sa.Enum('RECEIVE', 'SHIP', 'TRANSFER', 'ADJUST', name='doctype'), nullable=False),
     sa.Column('status', sa.Enum('DRAFT', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', name='docstatus'), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('operator_id', sa.Integer(), nullable=True),

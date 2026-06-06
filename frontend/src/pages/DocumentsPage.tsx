@@ -3,7 +3,6 @@ import { documents, catalog } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
 import { FileText, Plus, CheckCircle, Clock, XCircle, Eye, Edit2, Trash2, X, Save } from 'lucide-react'
 
-// 🔧 Утилита для безопасного форматирования даты
 const formatDate = (date: string | null | undefined): string => {
   if (!date) return '—'
   try {
@@ -21,15 +20,24 @@ const formatDate = (date: string | null | undefined): string => {
 interface DocItem {
   id: number
   doc_number: string
-  type: 'receive' | 'ship' | 'move' | 'adjust'
+  type: 'receive' | 'ship' | 'transfer' | 'adjust'
   status: 'draft' | 'in_progress' | 'completed' | 'cancelled'
   created_at: string | null
   comment: string | null
   items?: any[]
 }
 
+interface Cell {
+  id: number
+  code: string
+  zone_id: number
+}
+
 const typeLabels: Record<string, string> = {
-  receive: '📥 Приёмка', ship: '📤 Отгрузка', move: '🔄 Перемещение', adjust: '⚙️ Корректировка'
+  receive: '📥 Приёмка', 
+  ship: '📤 Отгрузка', 
+  transfer: '🔄 Перемещение',  // ← ИЗМЕНЕНО
+  adjust: '⚙️ Корректировка'
 }
 const statusConfig: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   draft: { label: 'Черновик', color: 'bg-gray-100 text-gray-700', icon: Clock },
@@ -38,21 +46,45 @@ const statusConfig: Record<string, { label: string; color: string; icon: React.E
   cancelled: { label: 'Отменён', color: 'bg-red-100 text-red-700', icon: XCircle },
 }
 
+// 🔧 Вспомогательная функция для безопасного отображения ошибок
+const getErrorMessage = (err: any): string => {
+  console.error('🔴 Full error:', err) // ← Показываем полную ошибку в консоли
+  
+  if (typeof err === 'string') return err
+  if (err?.message) return err.message
+  if (err?.detail) {
+    // Если detail это объект, преобразуем в строку
+    return typeof err.detail === 'object' 
+      ? JSON.stringify(err.detail) 
+      : err.detail
+  }
+  if (err?.response?.data?.detail) return err.response.data.detail
+  return 'Неизвестная ошибка. Проверьте консоль (F12)'
+}
+
 export default function DocumentsPage() {
-  const { hasRole } = useAuth() // ← ИСПРАВЛЕНО: используем hasRole
+  const { hasRole } = useAuth()
   const [docs, setDocs] = useState<DocItem[]>([])
   const [products, setProducts] = useState<any[]>([])
+  const [cells, setCells] = useState<Cell[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [newDoc, setNewDoc] = useState({ type: 'receive' as const, comment: '' })
-  const [docItems, setDocItems] = useState<{ product_id: number; quantity: number }[]>([])
   
-  // Для просмотра деталей
+  // 🔧 Убрали "as const" чтобы TypeScript разрешал смену типа
+  const [newDoc, setNewDoc] = useState({ type: 'receive', comment: '' })
+  const [docItems, setDocItems] = useState<Array<{ 
+    product_id: number
+    quantity: number
+    from_cell_id?: number
+    to_cell_id?: number 
+  }>>([])
+  
+  // Для просмотра
   const [selectedDoc, setSelectedDoc] = useState<any | null>(null)
   const [isDetailsLoading, setIsDetailsLoading] = useState(false)
   
-  // 👇 Для редактирования
+  // Для редактирования
   const [editingDoc, setEditingDoc] = useState<any | null>(null)
   const [editItems, setEditItems] = useState<any[]>([])
 
@@ -62,18 +94,25 @@ export default function DocumentsPage() {
       setDocs(Array.isArray(data) ? data : [])
     } catch (err) { console.error(err) }
   }
+  
   const loadProducts = async () => {
     try {
       const data = await catalog.products()
       setProducts(Array.isArray(data) ? data : [])
     } catch (err) { console.error(err) }
   }
+  
+  const loadCells = async () => {
+    try {
+      const data = await catalog.cells()
+      setCells(Array.isArray(data) ? data : [])
+    } catch (err) { console.error(err) }
+  }
 
   useEffect(() => { 
-    Promise.all([loadDocs(), loadProducts()]).finally(() => setIsLoading(false))
+    Promise.all([loadDocs(), loadProducts(), loadCells()]).finally(() => setIsLoading(false))
   }, [])
 
-  // 👇 ФУНКЦИЯ ЗАГРУЗКИ ДЕТАЛЕЙ ДОКУМЕНТА
   const handleViewDetails = async (id: number) => {
     setIsDetailsLoading(true)
     setSelectedDoc({ id, items: [] })
@@ -88,26 +127,18 @@ export default function DocumentsPage() {
     }
   }
 
-  // 👇 ФУНКЦИЯ РЕДАКТИРОВАНИЯ
- const handleEdit = async (id: number) => {
-  try {
-    // 👇 Быстрый тип-каст без импорта DocumentDetails
-    const doc = await documents.getDoc(id) as {
-      id: number
-      type: string
-      comment: string | null
-      items: any[]
+  const handleEdit = async (id: number) => {
+    try {
+      const doc = await documents.getDoc(id) as any
+      setEditingDoc({ id, type: doc.type, comment: doc.comment || '' })
+      setEditItems(doc.items || [])
+      setShowForm(false)
+      setSelectedDoc(null)
+    } catch (err) {
+      alert('❌ Ошибка загрузки документа: ' + getErrorMessage(err))
     }
-    setEditingDoc({ id, type: doc.type, comment: doc.comment || '' })
-    setEditItems(doc.items || [])
-    setShowForm(false)
-    setSelectedDoc(null)
-  } catch (err) {
-    alert('❌ Ошибка загрузки документа')
   }
-}
 
-  // 👇 ФУНКЦИЯ УДАЛЕНИЯ
   const handleDelete = async (id: number) => {
     if (!confirm('Вы уверены, что хотите удалить этот документ?')) return
     try {
@@ -115,7 +146,7 @@ export default function DocumentsPage() {
       await loadDocs()
       alert('✅ Документ удалён')
     } catch (err: any) {
-      alert('❌ ' + err.message)
+      alert('❌ ' + getErrorMessage(err))
     }
   }
 
@@ -133,13 +164,12 @@ export default function DocumentsPage() {
       await loadDocs()
       alert(`✅ Документ создан: ${res.doc_number}`)
     } catch (err: any) {
-      alert('❌ ' + (err.message || 'Ошибка при создании'))
+      alert('❌ ' + getErrorMessage(err))
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  // 👇 ФУНКЦИЯ ОБНОВЛЕНИЯ ДОКУМЕНТА
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingDoc || editItems.length === 0) return
@@ -155,7 +185,7 @@ export default function DocumentsPage() {
       await loadDocs()
       alert('✅ Документ обновлён')
     } catch (err: any) {
-      alert('❌ ' + (err.message || 'Ошибка при обновлении'))
+      alert('❌ ' + getErrorMessage(err))
     } finally {
       setIsSubmitting(false)
     }
@@ -167,25 +197,80 @@ export default function DocumentsPage() {
       await documents.complete(id)
       await loadDocs()
       alert('✅ Документ успешно проведён')
-    } catch (err: any) { alert('❌ ' + (err.message || 'Ошибка')) }
+    } catch (err: any) { 
+      alert('❌ ' + getErrorMessage(err)) 
+    }
   }
 
-  const addDocItem = () => setDocItems(prev => [...prev, { product_id: products[0]?.id || 1, quantity: 1 }])
-  const addEditItem = () => setEditItems(prev => [...prev, { product_id: products[0]?.id || 1, quantity: 1 }])
+  // 🔧 УМНАЯ ФУНКЦИЯ: автоподстановка ячеек в зависимости от типа документа
+  const getDefaultCells = (docType: string) => {
+    if (docType === 'receive') {
+      // Приёмка: автоматически ставим ячейку приёмки (REC-*) или первую доступную
+      const receivingCell = cells.find(c => c.code.toUpperCase().includes('REC')) || cells[0]
+      return { from_cell_id: undefined, to_cell_id: receivingCell?.id }
+    }
+    else if (docType === 'ship') {
+      // Отгрузка: нужно выбрать откуда (валидация на бэкенде)
+      return { from_cell_id: cells[0]?.id, to_cell_id: undefined }
+    }
+    else if (docType === 'transfer') {
+      // Перемещение: две разные ячейки
+      return { from_cell_id: cells[0]?.id, to_cell_id: cells[1]?.id }
+    }
+    else if (docType === 'adjust') {
+      // Корректировка: только целевая ячейка
+      return { from_cell_id: undefined, to_cell_id: cells[0]?.id }
+    }
+    return { from_cell_id: undefined, to_cell_id: undefined }
+  }
+
+  const addDocItem = () => {
+    const baseItem = { 
+      product_id: products[0]?.id || 1, 
+      quantity: 1,
+      ...getDefaultCells(newDoc.type)
+    }
+    setDocItems(prev => [...prev, baseItem])
+  }
+  
+  const addEditItem = () => {
+    const baseItem = { 
+      product_id: products[0]?.id || 1, 
+      quantity: 1,
+      ...getDefaultCells(editingDoc?.type)
+    }
+    setEditItems(prev => [...prev, baseItem])
+  }
   
   const updateDocItem = (idx: number, field: string, value: any) => {
-    setDocItems(prev => { const u = [...prev]; u[idx] = { ...u[idx], [field]: value }; return u })
+    setDocItems(prev => { 
+      const u = [...prev]
+      u[idx] = { ...u[idx], [field]: value }
+      return u 
+    })
   }
+  
   const updateEditItem = (idx: number, field: string, value: any) => {
-    setEditItems(prev => { const u = [...prev]; u[idx] = { ...u[idx], [field]: value }; return u })
+    setEditItems(prev => { 
+      const u = [...prev]
+      u[idx] = { ...u[idx], [field]: value }
+      return u 
+    })
   }
+
+  // 🔧 Проверка типа документа для отображения полей
+  const currentType = (editingDoc || newDoc).type
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-900">📄 Складские документы</h2>
         {hasRole(['admin', 'warehouse_manager']) && (
-          <button onClick={() => { setShowForm(!showForm); setEditingDoc(null); if(!showForm) loadProducts() }} 
+          <button onClick={() => { 
+            setShowForm(!showForm)
+            setEditingDoc(null)
+            if(!showForm) { loadProducts(); loadCells() } 
+          }} 
                   className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-all">
             <Plus className="w-4 h-4" /> {showForm ? 'Отмена' : 'Создать документ'}
           </button>
@@ -197,17 +282,25 @@ export default function DocumentsPage() {
         <form onSubmit={editingDoc ? handleUpdate : handleCreate} 
               className="mb-6 p-4 bg-white rounded-lg border border-gray-200 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-2">
           <h3 className="font-bold text-lg">{editingDoc ? '✏️ Редактирование' : '➕ Создание'} документа</h3>
+          
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <select 
-              value={(editingDoc || newDoc).type} 
-              onChange={e => editingDoc 
-                ? setEditingDoc({...editingDoc, type: e.target.value as any}) 
-                : setNewDoc({...newDoc, type: e.target.value as any})} 
+              value={currentType} 
+              onChange={e => {
+                const newType = e.target.value
+                if (editingDoc) {
+                  setEditingDoc({...editingDoc, type: newType})
+                } else {
+                  setNewDoc({...newDoc, type: newType})
+                  // Сбрасываем items при смене типа
+                  setDocItems([])
+                }
+              }} 
               className="p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
             >
               <option value="receive">📥 Приёмка</option>
               <option value="ship">📤 Отгрузка</option>
-              <option value="move">🔄 Перемещение</option>
+              <option value="transfer">🔄 Перемещение</option>
               <option value="adjust">⚙️ Корректировка</option>
             </select>
             <input 
@@ -220,40 +313,114 @@ export default function DocumentsPage() {
             />
           </div>
           
+          {/* 🔧 УМНЫЕ ПОДСКАЗКИ */}
+          <div className={`p-3 rounded-lg text-sm border ${
+            currentType === 'receive' ? 'bg-green-50 border-green-200 text-green-800' :
+            currentType === 'ship' ? 'bg-red-50 border-red-200 text-red-800' :
+            currentType === 'transfer' ? 'bg-blue-50 border-blue-200 text-blue-800' :
+            'bg-yellow-50 border-yellow-200 text-yellow-800'
+          }`}>
+            {currentType === 'receive' && '📥 Приёмка: товар поступает на склад. Укажите ячейку, куда разместить товар (по умолчанию: зона приёмки).'}
+            {currentType === 'ship' && '📤 Отгрузка: товар уходит со склада. Укажите ячейку, из которой списать товар.'}
+            {currentType === 'transfer' && '🔄 Перемещение: товар переезжает между ячейками. Укажите ОБЕ ячейки — откуда и куда.'}
+            {currentType === 'adjust' && '⚙️ Корректировка: ручное изменение остатков. Положительное число = оприходование, отрицательное = списание.'}
+          </div>
+          
           <div className="border-t border-gray-200 pt-4">
             <div className="flex items-center justify-between mb-2">
               <h4 className="font-medium text-gray-700">Позиции документа</h4>
               <button type="button" onClick={editingDoc ? addEditItem : addDocItem} 
                       className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">+ Добавить позицию</button>
             </div>
+            
             {(editingDoc ? editItems : docItems).map((item, idx) => (
-              <div key={idx} className="flex gap-2 mb-2 items-center">
-                <select value={item.product_id} 
-                        onChange={e => editingDoc 
-                          ? updateEditItem(idx, 'product_id', +e.target.value) 
-                          : updateDocItem(idx, 'product_id', +e.target.value)} 
-                        className="p-2 border border-gray-300 rounded-lg flex-1 focus:ring-2 focus:ring-indigo-500 outline-none">
-                  {products.map((p: any) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-                </select>
-                <input type="number" min="1" value={item.quantity} 
-                       onChange={e => editingDoc 
-                         ? updateEditItem(idx, 'quantity', +e.target.value) 
-                         : updateDocItem(idx, 'quantity', +e.target.value)} 
-                       className="p-2 border border-gray-300 rounded-lg w-24 focus:ring-2 focus:ring-indigo-500 outline-none" required />
-                <button type="button" onClick={() => editingDoc 
-                  ? setEditItems(prev => prev.filter((_, i) => i !== idx)) 
-                  : setDocItems(prev => prev.filter((_, i) => i !== idx))} 
-                        className="text-red-500 hover:text-red-700 p-2">✕</button>
+              <div key={idx} className="mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 mb-2">
+                  {/* Выбор товара */}
+                  <select 
+                    value={item.product_id} 
+                    onChange={e => editingDoc 
+                      ? updateEditItem(idx, 'product_id', +e.target.value) 
+                      : updateDocItem(idx, 'product_id', +e.target.value)} 
+                    className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                  >
+                    {products.map((p: any) => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+                  </select>
+                  
+                  {/* Количество */}
+                  <input 
+                    type="number" 
+                    placeholder={currentType === 'adjust' ? "Кол-во (- для списания)" : "Кол-во"} 
+                    value={item.quantity} 
+                    onChange={e => editingDoc 
+                      ? updateEditItem(idx, 'quantity', +e.target.value) 
+                      : updateDocItem(idx, 'quantity', +e.target.value)} 
+                    className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none" 
+                    required 
+                  />
+                  
+                  {/* 🔧 FROM cell: показываем для ship и move */}
+                  {(currentType === 'ship' || currentType === 'transfer') && (
+                    <select 
+                      value={item.from_cell_id || ''} 
+                      onChange={e => editingDoc 
+                        ? updateEditItem(idx, 'from_cell_id', +e.target.value || undefined) 
+                        : updateDocItem(idx, 'from_cell_id', +e.target.value || undefined)} 
+                      className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      title={currentType === 'ship' ? 'Ячейка, из которой списать товар' : 'Ячейка-источник'}
+                    >
+                      <option value="">
+                        {currentType === 'ship' ? '📦 Откуда списать' : '📤 Из ячейки'}
+                      </option>
+                      {cells.map((c: Cell) => <option key={c.id} value={c.id}>📍 {c.code}</option>)}
+                    </select>
+                  )}
+                  
+                  {/* 🔧 TO cell: показываем для receive, move, adjust */}
+                  {(currentType === 'receive' || currentType === 'transfer' || currentType === 'adjust') && (
+                    <select 
+                      value={item.to_cell_id || ''} 
+                      onChange={e => editingDoc 
+                        ? updateEditItem(idx, 'to_cell_id', +e.target.value || undefined) 
+                        : updateDocItem(idx, 'to_cell_id', +e.target.value || undefined)} 
+                      className="p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none"
+                      title={currentType === 'receive' ? 'Ячейка для размещения товара' : 'Целевая ячейка'}
+                    >
+                      <option value="">
+                        {currentType === 'receive' ? '📥 Куда разместить' : '📥 В ячейку'}
+                      </option>
+                      {cells.map((c: Cell) => <option key={c.id} value={c.id}>📍 {c.code}</option>)}
+                    </select>
+                  )}
+                  
+                  {/* Кнопка удаления позиции */}
+                  <button type="button" onClick={() => editingDoc 
+                    ? setEditItems(prev => prev.filter((_, i) => i !== idx)) 
+                    : setDocItems(prev => prev.filter((_, i) => i !== idx))} 
+                          className="text-red-500 hover:text-red-700 p-2 self-center"
+                          title="Удалить позицию">✕</button>
+                </div>
               </div>
             ))}
-            {(editingDoc ? editItems : docItems).length === 0 && <p className="text-sm text-gray-400 py-2 text-center">Нажмите «+ Добавить позицию»</p>}
+            
+            {(editingDoc ? editItems : docItems).length === 0 && (
+              <p className="text-sm text-gray-400 py-2 text-center">
+                Нажмите «+ Добавить позицию» чтобы добавить товар в документ
+              </p>
+            )}
           </div>
+          
           <div className="flex gap-3 pt-2">
             <button type="submit" disabled={isSubmitting || (editingDoc ? editItems : docItems).length === 0} 
                     className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors flex items-center justify-center gap-2">
               <Save className="w-4 h-4" /> {isSubmitting ? 'Сохранение...' : (editingDoc ? 'Сохранить изменения' : 'Создать документ')}
             </button>
-            <button type="button" onClick={() => { setShowForm(false); setEditingDoc(null); setDocItems([]); setEditItems([]) }} 
+            <button type="button" onClick={() => { 
+              setShowForm(false)
+              setEditingDoc(null)
+              setDocItems([])
+              setEditItems([])
+            }} 
                     className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors">
               Отмена
             </button>
@@ -261,6 +428,7 @@ export default function DocumentsPage() {
         </form>
       )}
 
+      {/* Таблица документов */}
       {isLoading ? (
         <div className="text-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div></div>
       ) : docs.length === 0 ? (

@@ -122,7 +122,6 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 ).first()
                 
                 if not stock:
-                    # Создаём новую запись об остатке
                     stock = Stock(
                         product_id=item.product_id,
                         cell_id=item.to_cell_id,
@@ -135,7 +134,7 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 stock.quantity += item.quantity
                 
             elif doc_type == "ship":
-                # ОТГРУЗКА: уменьшаем остаток (с проверкой!)
+                # ОТГРУЗКА: уменьшаем остаток
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.from_cell_id
@@ -149,23 +148,74 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                     )
                 
                 stock.quantity -= item.quantity
+
+            elif doc_type == "transfer":
+                #  ПЕРЕМЕЩЕНИЕ: из ячейки A в ячейку B
+                if not item.from_cell_id or not item.to_cell_id:
+                    raise HTTPException(400, "Для перемещения укажите ячейки 'Откуда' и 'Куда'")
+                
+                if item.from_cell_id == item.to_cell_id:
+                    raise HTTPException(400, "Ячейки 'Откуда' и 'Куда' не могут совпадать")
+
+                # 1. Списываем из исходной ячейки
+                stock_from = db.query(Stock).filter(
+                    Stock.product_id == item.product_id,
+                    Stock.cell_id == item.from_cell_id
+                ).first()
+
+                if not stock_from:
+                    raise HTTPException(400, f"Товар не найден в ячейке {item.from_cell_id}. Сначала примите его на склад!")
+
+                if not stock_from or stock_from.quantity < item.quantity:
+                    available = stock_from.quantity if stock_from else 0
+                    raise HTTPException(400, f"Недостаточно товара в ячейке {item.from_cell_id}: доступно {available}, нужно {item.quantity}")
+                
+                stock_from.quantity -= item.quantity
+
+                # 2. Добавляем в целевую ячейку
+                stock_to = db.query(Stock).filter(
+                    Stock.product_id == item.product_id,
+                    Stock.cell_id == item.to_cell_id
+                ).first()
+
+                if not stock_to:
+                    stock_to = Stock(
+                        product_id=item.product_id,
+                        cell_id=item.to_cell_id,
+                        quantity=0
+                    )
+                    db.add(stock_to)
+                    db.flush()
+                
+                stock_to.quantity += item.quantity
                 
             elif doc_type == "adjust":
-                # КОРРЕКТИРОВКА: устанавливаем точное значение
+                # ️ КОРРЕКТИРОВКА: + это приход, - это списание
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.to_cell_id
                 ).first()
-                
-                if not stock:
-                    stock = Stock(
-                        product_id=item.product_id,
-                        cell_id=item.to_cell_id,
-                        quantity=item.quantity
-                    )
-                    db.add(stock)
+
+                if item.quantity > 0:
+                    # Оприходование (добавляем)
+                    if not stock:
+                        stock = Stock(
+                            product_id=item.product_id,
+                            cell_id=item.to_cell_id,
+                            quantity=0
+                        )
+                        db.add(stock)
+                        db.flush()
+                    stock.quantity += item.quantity
+                    
+                elif item.quantity < 0:
+                    # Списание (вычитаем)
+                    if not stock or stock.quantity < abs(item.quantity):
+                        available = stock.quantity if stock else 0
+                        raise HTTPException(400, f"Недостаточно товара для списания: доступно {available}, нужно списать {abs(item.quantity)}")
+                    stock.quantity += item.quantity  # quantity отрицательное, поэтому += работает как вычитание
                 else:
-                    stock.quantity = item.quantity
+                    raise HTTPException(400, "Количество не может быть 0")
         
         # Меняем статус документа
         doc.status = DocStatus.COMPLETED
@@ -268,4 +318,3 @@ def delete_document(
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
-    

@@ -6,7 +6,7 @@ import enum
 class DocType(str, enum.Enum):
     RECEIVE = "receive"
     SHIP = "ship"
-    MOVE = "move"
+    TRANSFER = "transfer"
     ADJUST = "adjust"
 
 class DocStatus(str, enum.Enum):
@@ -20,7 +20,7 @@ class WarehouseDocument(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     doc_number = Column(String(50), unique=True, nullable=False)
-    type = Column(Enum(DocType), nullable=False)
+    type = Column(Enum(DocType, values_callable=lambda x: [e.value for e in x]), nullable=False)
     status = Column(Enum(DocStatus), default=DocStatus.DRAFT)
     operator_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     comment = Column(Text, nullable=True)
