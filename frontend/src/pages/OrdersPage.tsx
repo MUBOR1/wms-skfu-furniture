@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { orders, catalog } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
-import { Plus, CheckCircle, Clock, Truck, XCircle, Package, Eye, X } from 'lucide-react'
+import { Plus, CheckCircle, Clock, Truck, XCircle, Package, Eye, X, Lock, LockOpen } from 'lucide-react'
 
 const statusConfig: Record<string, { label: string; color: string; icon: any }> = {
   pending: { label: 'Ожидает', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
@@ -18,6 +18,9 @@ export default function OrdersPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  
+  // 🔒 СОСТОЯНИЕ ДЛЯ БЛОКИРОВКИ КОЛОНКИ УПРАВЛЕНИЯ
+  const [isManagementVisible, setIsManagementVisible] = useState(true)
   
   // 👇 СОСТОЯНИЕ ДЛЯ ИНФОРМАЦИОННОЙ МОДАЛКИ
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null)
@@ -37,10 +40,9 @@ export default function OrdersPage() {
     load()
   }, [])
 
-  // 👇 ФУНКЦИЯ ЗАГРУЗКИ ДЕТАЛЕЙ ЗАКАЗА
   const handleViewInfo = async (id: number) => {
     setIsInfoLoading(true)
-    setSelectedOrder({ id, items: [] }) // Показываем заглушку
+    setSelectedOrder({ id, items: [] })
     try {
       const res = await orders.get(id)
       setSelectedOrder(res)
@@ -84,14 +86,40 @@ export default function OrdersPage() {
     <div className="p-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-900">📦 Заказы клиентов</h2>
-        {hasRole(['admin', 'warehouse_manager']) && (
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
-            <Plus className="w-4 h-4" /> {showForm ? 'Отмена' : 'Создать заказ'}
-          </button>
-        )}
+        
+        <div className="flex items-center gap-3">
+          {/* 🔒 КНОПКА БЛОКИРОВКИ УПРАВЛЕНИЯ */}
+          {hasRole(['admin', 'warehouse_manager']) && (
+            <button
+              onClick={() => setIsManagementVisible(!isManagementVisible)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all border ${
+                isManagementVisible 
+                  ? 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400' 
+                  : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100 hover:border-red-300'
+              }`}
+              title={isManagementVisible ? 'Скрыть колонку управления' : 'Показать колонку управления'}
+            >
+              {isManagementVisible ? (
+                <>
+                  <LockOpen className="w-4 h-4" /> Управление
+                </>
+              ) : (
+                <>
+                  <Lock className="w-4 h-4" /> Закрыто
+                </>
+              )}
+            </button>
+          )}
+          
+          {hasRole(['admin', 'warehouse_manager']) && (
+            <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700">
+              <Plus className="w-4 h-4" /> {showForm ? 'Отмена' : 'Создать заказ'}
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Форма создания (без изменений) */}
+      {/* Форма создания */}
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-white rounded-lg border border-gray-200 shadow-sm space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -126,7 +154,11 @@ export default function OrdersPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Статус</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Отгрузка</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Инфо</th>
-                {hasRole(['admin', 'warehouse_manager']) && <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Управление</th>}
+                
+                {/* 🔒 УСЛОВНЫЙ ЗАГОЛОВОК КОЛОНКИ УПРАВЛЕНИЯ */}
+                {hasRole(['admin', 'warehouse_manager']) && isManagementVisible && (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Управление</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -145,7 +177,6 @@ export default function OrdersPage() {
                     <td className="px-4 py-3 text-sm text-gray-500">
                       {order.shipment_doc_id ? '✅ Создана' : '—'}
                     </td>
-                    {/*  КНОПКА ИНФО */}
                     <td className="px-4 py-3 text-center">
                       <button 
                         onClick={() => handleViewInfo(order.id)}
@@ -155,7 +186,9 @@ export default function OrdersPage() {
                         <Eye className="w-5 h-5" />
                       </button>
                     </td>
-                    {hasRole(['admin', 'warehouse_manager']) && (
+                    
+                    {/* 🔒 УСЛОВНАЯ ЯЧЕЙКА УПРАВЛЕНИЯ */}
+                    {hasRole(['admin', 'warehouse_manager']) && isManagementVisible && (
                       <td className="px-4 py-3">
                         <select value={order.status} onChange={e => handleStatusChange(order.id, e.target.value)} className="p-1 border rounded text-sm">
                           {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
@@ -187,7 +220,6 @@ export default function OrdersPage() {
                 <div className="flex justify-center py-8"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent"></div></div>
               ) : (
                 <div className="space-y-4">
-                  {/* Список товаров */}
                   <table className="w-full text-sm">
                     <thead className="bg-gray-100 text-gray-600">
                       <tr>
