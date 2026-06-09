@@ -40,6 +40,12 @@ export const auth = {
   me: () => request<{ id: number; login: string; role: 'admin' | 'warehouse_manager' | 'warehouse_worker' | 'client'; full_name: string | null; is_active: boolean }>('/auth/me'),
 }
 
+// 🔧 Интерфейс для категории
+export interface Category {
+  name: string
+  product_count?: number
+}
+
 export const catalog = {
   products: (search?: string) => 
     request<Array<{ 
@@ -52,44 +58,76 @@ export const catalog = {
       max_stock: number;
       purchase_price: number;
       sale_price: number;
-    }>>(`/catalog/products${search ? `?search=${search}` : ''}`),
+    }>>(`/catalog/products${search ? `?search=${encodeURIComponent(search)}` : ''}`),
     
   createProduct: (data: any) => request('/catalog/products', { 
     method: 'POST', 
     body: JSON.stringify(data) 
   }),
   
-  // 👇 НОВЫЕ МЕТОДЫ:
   updateProduct: (id: number, data: any) => request(`/catalog/products/${id}`, { 
     method: 'PUT', 
     body: JSON.stringify(data) 
   }),
+
+  // 🔍 Архив товаров
+  archived: (params?: { search?: string; date_from?: string; date_to?: string }) => {
+  const queryParams = new URLSearchParams()
+  if (params?.search) queryParams.append('search', params.search)
+  if (params?.date_from) queryParams.append('date_from', params.date_from)
+  if (params?.date_to) queryParams.append('date_to', params.date_to)
   
-  deleteProduct: (id: number) => request(`/catalog/products/${id}`, { method: 'DELETE' }),
+  const queryString = queryParams.toString()
+  return request<Array<{ 
+    id: number; 
+    sku: string; 
+    name: string; 
+    category: string | null;
+    archived_at?: string | null;
+  }>>(`/catalog/products/archived${queryString ? '?' + queryString : ''}`)
+},
   
-  categories: () => request<string[]>('/catalog/categories'),
+  // ♻️ Восстановить товар
+  restoreProduct: (id: number) => 
+    request(`/catalog/products/${id}/restore`, { method: 'POST' }),
+  
+  // 🔥 Полное удаление из архива
+  deletePermanent: (id: number) => 
+    request(`/catalog/products/${id}/permanent`, { method: 'DELETE' }),
+  
+  // 🔧 УДАЛЕНИЕ ТОВАРА (с поддержкой hard delete)
+  deleteProduct: (id: number, hard: boolean = false) => 
+    request(`/catalog/products/${id}?hard=${hard}`, { method: 'DELETE' }),
+  
+  // 🔧 КАТЕГОРИИ — возвращаем Category[] | string[] для обратной совместимости
+  categories: () => request<Category[] | string[]>('/catalog/categories'),
+  
+  // 🔧 НОВЫЕ МЕТОДЫ ДЛЯ УПРАВЛЕНИЯ КАТЕГОРИЯМИ
+  createCategory: (name: string) => 
+    request(`/catalog/categories?name=${encodeURIComponent(name)}`, { method: 'POST' }),
+  
+  updateCategory: (oldName: string, newName: string) => 
+    request(`/catalog/categories/${encodeURIComponent(oldName)}?new_name=${encodeURIComponent(newName)}`, { method: 'PUT' }),
+  
+  deleteCategory: (name: string) => 
+    request(`/catalog/categories/${encodeURIComponent(name)}`, { method: 'DELETE' }),
   
   zones: () => request('/catalog/zones'),
   cells: (zoneId?: number) => request(`/catalog/cells${zoneId ? `?zone_id=${zoneId}` : ''}`),
 }
 
 export const documents = {
-  // 👇 ПРОСТОЙ СПИСОК БЕЗ ТИПА
   list: () => request('/documents/'),
-  
-  // 👇 getDoc возвращает any (просто для работы)
   getDoc: (id: number) => request(`/documents/${id}`),
-  
   create: (data: any) => request('/documents/', { method: 'POST', body: JSON.stringify(data) }),
-  
-  // 👇 update и delete тоже без сложных типов
-  update: (id: number, data: any) => request(`/documents/${id}`, { 
-    method: 'PUT', 
-    body: JSON.stringify(data) 
-  }),
+  update: (id: number, data: any) => request(`/documents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: number) => request(`/documents/${id}`, { method: 'DELETE' }),
-  
   complete: (id: number) => request(`/documents/${id}/complete`, { method: 'POST' }),
+  // 🔧 НОВОЕ:
+  updateStatus: (id: number, status: string) => request(`/documents/${id}/status`, { 
+    method: 'PATCH', 
+    body: JSON.stringify({ status }) 
+  }),
 }
 
 export const inventory = {
@@ -110,6 +148,7 @@ export const orders = {
 export const analytics = {
   dashboardStats: (days: number = 30) => request(`/analytics/dashboard-stats?days=${days}`),
   stockReport: () => request('/analytics/stock-report'),
+  stockDetails: (productId: number) => request(`/analytics/stock-details?product_id=${productId}`),
 }
 
 export const audit = {
@@ -119,8 +158,8 @@ export const audit = {
   },
 }
 
-export const catalogExport = async () => {
-  const res = await fetch('/api/catalog/products/export', {
+export const catalogExport = async (format: 'csv' | 'xlsx' = 'csv') => {
+  const res = await fetch(`/api/catalog/products/export?format=${format}`, {
     headers: { Authorization: `Bearer ${localStorage.getItem('wms_token')}` }
   })
   if (!res.ok) throw new Error('Ошибка экспорта')
@@ -128,11 +167,18 @@ export const catalogExport = async () => {
   const url = window.URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = 'products_export.csv'
+  a.download = `products_export_${new Date().toISOString().slice(0,10)}.${format}`
   document.body.appendChild(a)
   a.click()
   a.remove()
 }
+
+// 🔧 МАССОВОЕ УДАЛЕНИЕ (с поддержкой hard delete)
+export const bulkDeleteProducts = (productIds: number[], hard: boolean = false) => 
+  request<{ success: number; errors: number; error_details?: string[]; hard_delete?: boolean }>('/catalog/products/bulk-delete', { 
+    method: 'POST', 
+    body: JSON.stringify({ product_ids: productIds, hard }) 
+  })
 
 export const catalogImport = async (file: File) => {
   const formData = new FormData()
@@ -145,6 +191,8 @@ export const catalogImport = async (file: File) => {
   return res.json()
 }
 
+
+
 export interface Order {
   id: number
   order_number: string
@@ -154,7 +202,7 @@ export interface Order {
   comment: string | null
   created_at: string
   shipment_doc_id?: number | null
-  items?: { // инфо о заказах
+  items?: {
     id: number
     product_id: number
     quantity: number

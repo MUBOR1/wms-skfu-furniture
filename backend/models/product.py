@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Numeric
+from sqlalchemy import Column, Integer, String, Float, Boolean, Numeric, DateTime, func
 from database import Base
+from datetime import datetime
 
 class Product(Base):
     __tablename__ = "products"
@@ -28,3 +29,10 @@ class Product(Base):
     
     # Статус
     is_active = Column(Boolean, default=True)
+    
+    # 🔧 НОВОЕ: Дата архивации (заполняется при отправке в архив)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # 🔧 Мета-поля для аудита
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

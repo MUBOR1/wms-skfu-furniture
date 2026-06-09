@@ -30,7 +30,7 @@ def create_document(data: DocumentCreate, db: Session = Depends(get_db), current
         )
         
         db.add(doc)
-        db.flush()  # Получаем doc.id
+        db.flush()
         
         for item in data.items:
             db.add(DocumentItem(
@@ -61,12 +61,10 @@ def get_document_details(doc_id: int, db: Session = Depends(get_db), user: User 
     if not doc:
         raise HTTPException(404, "Документ не найден")
     
-    # Загружаем позиции отдельно с товарами
     doc_items = db.query(DocumentItem).join(Product).filter(
         DocumentItem.doc_id == doc_id
     ).all()
     
-    # Возвращаем документ + позиции с названиями товаров
     return {
         "id": doc.id,
         "doc_number": doc.doc_number,
@@ -105,17 +103,14 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
         if not items:
             raise HTTPException(400, "Документ пуст")
         
-        # Обрабатываем каждую позицию
         for item in items:
             product = db.query(Product).get(item.product_id)
             if not product:
                 raise HTTPException(404, f"Товар {item.product_id} не найден")
             
-            # Определяем тип операции
             doc_type = doc.type.value if hasattr(doc.type, 'value') else str(doc.type)
             
             if doc_type == "receive":
-                # ПРИЁМКА: увеличиваем остаток
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.to_cell_id
@@ -134,7 +129,6 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 stock.quantity += item.quantity
                 
             elif doc_type == "ship":
-                # ОТГРУЗКА: уменьшаем остаток
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.from_cell_id
@@ -150,14 +144,12 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 stock.quantity -= item.quantity
 
             elif doc_type == "transfer":
-                #  ПЕРЕМЕЩЕНИЕ: из ячейки A в ячейку B
                 if not item.from_cell_id or not item.to_cell_id:
                     raise HTTPException(400, "Для перемещения укажите ячейки 'Откуда' и 'Куда'")
                 
                 if item.from_cell_id == item.to_cell_id:
                     raise HTTPException(400, "Ячейки 'Откуда' и 'Куда' не могут совпадать")
 
-                # 1. Списываем из исходной ячейки
                 stock_from = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.from_cell_id
@@ -172,7 +164,6 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 
                 stock_from.quantity -= item.quantity
 
-                # 2. Добавляем в целевую ячейку
                 stock_to = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.to_cell_id
@@ -190,14 +181,12 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                 stock_to.quantity += item.quantity
                 
             elif doc_type == "adjust":
-                # ️ КОРРЕКТИРОВКА: + это приход, - это списание
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.to_cell_id
                 ).first()
 
                 if item.quantity > 0:
-                    # Оприходование (добавляем)
                     if not stock:
                         stock = Stock(
                             product_id=item.product_id,
@@ -209,20 +198,17 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
                     stock.quantity += item.quantity
                     
                 elif item.quantity < 0:
-                    # Списание (вычитаем)
                     if not stock or stock.quantity < abs(item.quantity):
                         available = stock.quantity if stock else 0
                         raise HTTPException(400, f"Недостаточно товара для списания: доступно {available}, нужно списать {abs(item.quantity)}")
-                    stock.quantity += item.quantity  # quantity отрицательное, поэтому += работает как вычитание
+                    stock.quantity += item.quantity
                 else:
                     raise HTTPException(400, "Количество не может быть 0")
         
-        # Меняем статус документа
         doc.status = DocStatus.COMPLETED
         db.commit()
         db.refresh(doc)
         
-        # Логируем
         log_action(
             db=db,
             user=current_user,
@@ -243,7 +229,6 @@ def complete_document(doc_id: int, db: Session = Depends(get_db), current_user: 
         print(f"🔴 COMPLETE ERROR:\n{str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
-# === РЕДАКТИРОВАНИЕ ДОКУМЕНТА ===
 @router.put("/{doc_id}", response_model=DocumentResponse)
 def update_document(
     doc_id: int,
@@ -258,17 +243,14 @@ def update_document(
         if doc.status != DocStatus.DRAFT:
             raise HTTPException(400, "Можно редактировать только черновики")
         
-        # Обновляем основные поля
         doc.type = data.type
         doc.comment = data.comment
         
-        # Удаляем старые позиции
         old_items = db.query(DocumentItem).filter(DocumentItem.doc_id == doc_id).all()
         for item in old_items:
             db.delete(item)
         db.flush()
         
-        # Добавляем новые позиции
         for item_data in data.items:
             db.add(DocumentItem(
                 doc_id=doc.id,
@@ -288,7 +270,46 @@ def update_document(
         db.rollback()
         raise HTTPException(500, str(e))
 
-# === УДАЛЕНИЕ ДОКУМЕНТА ===
+# 🔧 НОВЫЙ: Эндпоинт для отмены документа
+@router.patch("/{doc_id}/status", response_model=dict)
+def update_document_status(
+    doc_id: int,
+    data: dict,  # {"status": "cancelled"}
+    db: Session = Depends(get_db),
+    current_user: User = require_manager
+):
+    try:
+        doc = db.query(WarehouseDocument).filter(WarehouseDocument.id == doc_id).first()
+        if not doc:
+            raise HTTPException(404, "Документ не найден")
+        
+        new_status = data.get("status")
+        
+        if new_status == "cancelled":
+            # Можно отменить только черновик или документ в работе
+            if doc.status in [DocStatus.COMPLETED]:
+                raise HTTPException(400, "Нельзя отменить проведённый документ")
+            
+            doc.status = DocStatus.CANCELLED
+            log_action(db, current_user, "CANCEL", "document", doc_id,
+                       old_value={"status": doc.status},
+                       new_value={"status": "cancelled"})
+        elif new_status == "draft":
+            doc.status = DocStatus.DRAFT
+        elif new_status == "in_progress":
+            doc.status = DocStatus.IN_PROGRESS
+        else:
+            raise HTTPException(400, f"Неизвестный статус: {new_status}")
+        
+        db.commit()
+        return {"message": f"Статус изменён на {new_status}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+
 @router.delete("/{doc_id}")
 def delete_document(
     doc_id: int,
@@ -302,12 +323,10 @@ def delete_document(
         if doc.status != DocStatus.DRAFT:
             raise HTTPException(400, "Можно удалять только черновики")
         
-        # Сначала удаляем позиции
         items = db.query(DocumentItem).filter(DocumentItem.doc_id == doc_id).all()
         for item in items:
             db.delete(item)
         
-        # Затем сам документ
         db.delete(doc)
         
         log_action(db, current_user, "DELETE", "document", doc_id,

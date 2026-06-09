@@ -8,12 +8,21 @@ class OrderItemCreate(BaseModel):
     quantity: int
     unit_price: float
 
+# 🔧 ДОБАВЛЕНА СХЕМА ДЛЯ ТОВАРА В ПОЗИЦИИ ЗАКАЗА
+class ProductInOrder(BaseModel):
+    id: int
+    sku: str
+    name: str
+    model_config = ConfigDict(from_attributes=True)
+
 class OrderItemResponse(BaseModel):
     id: int
     product_id: int
     quantity: int
     unit_price: float
     total_price: float
+    # 🔧 ДОБАВЛЕНО: вложенный объект товара
+    product: Optional[ProductInOrder] = None
     model_config = ConfigDict(from_attributes=True)
 
 class OrderCreate(BaseModel):
@@ -34,7 +43,7 @@ class OrderResponse(BaseModel):
     total_amount: float
     comment: Optional[str]
     created_at: datetime
-    items: List[OrderItemResponse] = []
     shipment_doc_id: Optional[int] = None
+    # 🔧 ИСПРАВЛЕНО: убран дублирующийся items
     items: List[OrderItemResponse] = []
     model_config = ConfigDict(from_attributes=True)

@@ -13,24 +13,18 @@ import uuid
 
 router = APIRouter(prefix="/api/orders", tags=["Заказы"])
 
-# 🔧 ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: Обновление остатков при проведении документа
 def _process_document_stock(db: Session, doc_type: str, items: list, log_prefix: str = ""):
-    """
-    Общая логика обновления остатков для всех типов документов.
-    Вызывается из complete_document() и update_order_status().
-    """
+    """Общая логика обновления остатков для всех типов документов."""
     for item in items:
         product = db.query(Product).get(item.product_id)
         if not product:
-            continue  # Или raise HTTPException, если нужно строго
+            continue
         
         if doc_type == "receive":
-            # ПРИЁМКА: добавляем в целевую ячейку
             stock = db.query(Stock).filter(
                 Stock.product_id == item.product_id,
                 Stock.cell_id == item.to_cell_id
             ).first()
-            
             if not stock:
                 stock = Stock(
                     product_id=item.product_id,
@@ -43,20 +37,15 @@ def _process_document_stock(db: Session, doc_type: str, items: list, log_prefix:
             stock.quantity += item.quantity
             
         elif doc_type == "ship":
-            # ОТГРУЗКА: списываем из исходной ячейки
             stock = db.query(Stock).filter(
                 Stock.product_id == item.product_id,
                 Stock.cell_id == item.from_cell_id
             ).first()
-            
             if stock and stock.quantity >= item.quantity:
                 stock.quantity -= item.quantity
-            # Если товара недостаточно — можно добавить обработку ошибки
                 
         elif doc_type == "move":
-            # ПЕРЕМЕЩЕНИЕ: из A в B
             if item.from_cell_id and item.to_cell_id and item.from_cell_id != item.to_cell_id:
-                # Списываем из A
                 stock_from = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.from_cell_id
@@ -64,7 +53,6 @@ def _process_document_stock(db: Session, doc_type: str, items: list, log_prefix:
                 if stock_from and stock_from.quantity >= item.quantity:
                     stock_from.quantity -= item.quantity
                 
-                # Добавляем в B
                 stock_to = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.cell_id == item.to_cell_id
@@ -80,12 +68,10 @@ def _process_document_stock(db: Session, doc_type: str, items: list, log_prefix:
                 stock_to.quantity += item.quantity
                 
         elif doc_type == "adjust":
-            # КОРРЕКТИРОВКА: + или - в целевой ячейке
             stock = db.query(Stock).filter(
                 Stock.product_id == item.product_id,
                 Stock.cell_id == item.to_cell_id
             ).first()
-            
             if not stock:
                 stock = Stock(
                     product_id=item.product_id,
@@ -94,8 +80,6 @@ def _process_document_stock(db: Session, doc_type: str, items: list, log_prefix:
                 )
                 db.add(stock)
                 db.flush()
-            
-            # item.quantity может быть отрицательным для списания
             stock.quantity += item.quantity
 
 
@@ -104,6 +88,23 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db), current_user:
     try:
         if not data.items:
             raise HTTPException(400, "Добавьте хотя бы одну позицию")
+        
+        # 🔧 ПРОВЕРКА ОСТАТКОВ ПЕРЕД СОЗДАНИЕМ ЗАКАЗА
+        for item in data.items:
+            # Считаем общий остаток по всем ячейкам для этого товара
+            total_stock = db.query(Stock.quantity).filter(
+                Stock.product_id == item.product_id
+            ).all()
+            available_qty = sum(qty[0] for qty in total_stock if qty[0] is not None)
+            
+            if item.quantity > available_qty:
+                product = db.query(Product).get(item.product_id)
+                product_name = product.name if product else f"Товар #{item.product_id}"
+                raise HTTPException(
+                    400,
+                    detail=f"Недостаточно товара \"{product_name}\" (SKU: {product.sku if product else 'N/A'}).\n"
+                           f"Запрошено: {item.quantity}, доступно: {available_qty}"
+                )
         
         order_number = data.order_number.strip() if data.order_number else f"ORD-{uuid.uuid4().hex[:8].upper()}"
         total_amount = sum(item.quantity * item.unit_price for item in data.items)
@@ -136,16 +137,20 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db), current_user:
         db.refresh(order)
         return order
         
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"🔴 CREATE ORDER ERROR: {str(e)}")
         raise HTTPException(500, str(e))
+
 
 @router.get("/", response_model=list[OrderResponse])
 def list_orders(db: Session = Depends(get_db), current_user: User = require_worker):
     return db.query(Order).options(
         joinedload(Order.items)
     ).order_by(Order.created_at.desc()).all()
+
 
 @router.get("/{order_id}", response_model=OrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db), current_user: User = require_worker):
@@ -157,6 +162,7 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: User =
         raise HTTPException(404, "Заказ не найден")
     
     return order
+
 
 @router.patch("/{order_id}/status", response_model=OrderResponse)
 def update_order_status(
@@ -172,7 +178,6 @@ def update_order_status(
         
         old_status = order.status
         
-        # 1. ЛОГИРУЕМ СМЕНУ СТАТУСА (с разницей было/стало)
         if old_status != data.status:
             log_action(
                 db=db,
@@ -184,26 +189,20 @@ def update_order_status(
                 new_value={"status": str(data.status)}
             )
         
-        # 2. ГЛАВНОЕ: ЛОГИКА ОТМЕНЫ (ВОЗВРАТ ОСТАТКОВ)
+        # 🔧 ЛОГИКА ОТМЕНЫ (ВОЗВРАТ ОСТАТКОВ)
         if data.status == OrderStatus.CANCELLED and order.shipment_doc_id:
-            # Ищем документ отгрузки, который был создан ранее
             shipment_doc = db.query(WarehouseDocument).get(order.shipment_doc_id)
             
             if shipment_doc and shipment_doc.status != DocStatus.CANCELLED:
-                # Проходим по всем позициям отгрузки и возвращаем товар
                 for item in shipment_doc.items:
-                    # Находим запись об остатке в ячейке, ОТКУДА забрали товар
                     stock = db.query(Stock).filter(
                         Stock.product_id == item.product_id,
                         Stock.cell_id == item.from_cell_id
                     ).first()
                     
                     if stock:
-                        # Возвращаем количество (прибавляем)
                         stock.quantity += item.quantity
                     else:
-                        # Если ячейки не было (ошибка данных), создаем новую
-                        # (маловероятно, но для надежности)
                         stock = Stock(
                             product_id=item.product_id,
                             cell_id=item.from_cell_id,
@@ -211,22 +210,17 @@ def update_order_status(
                         )
                         db.add(stock)
                 
-                # Помечаем сам документ отгрузки как отменённый
                 shipment_doc.status = DocStatus.CANCELLED
-                
-                # Снимаем привязку, чтобы заказ снова стал "чистым"
                 order.shipment_doc_id = None
                 
                 log_action(db, current_user, "CANCEL_SHIPMENT", "order", order_id,
                            new_value={"returned_to_stock": True, "doc_id": shipment_doc.id})
 
-        # 3. Стандартное обновление полей
         order.status = data.status
         if data.comment:
             order.comment = data.comment
         
-        # 4. АВТО-ОТГРУЗКА (если ставим статус "Отгружен" или "Доставлен")
-        # (Этот код работает только если shipment_doc_id ещё не было)
+        # 🔧 АВТО-ОТГРУЗКА (списываем остатки только при смене статуса на "Отгружен")
         if data.status in [OrderStatus.SHIPPED, OrderStatus.DELIVERED] and not order.shipment_doc_id:
             import uuid
             doc = WarehouseDocument(
@@ -241,16 +235,21 @@ def update_order_status(
             
             order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
             for item in order_items:
+                # 🔧 Ищем остаток в первой доступной ячейке
                 stock = db.query(Stock).filter(
                     Stock.product_id == item.product_id,
                     Stock.quantity > 0
-                ).first()
+                ).order_by(Stock.quantity.desc()).first()
                 
                 from_cell = stock.cell_id if stock else None
                 
-                # Списываем остатки сразу
-                if stock:
+                # 🔧 Списываем остатки только если есть что списывать
+                if stock and stock.quantity >= item.quantity:
                     stock.quantity -= item.quantity
+                elif stock:
+                    # Если товара меньше чем нужно — списываем что есть
+                    stock.quantity = 0
+                # Если товара вообще нет — документ создаётся, но остаток не меняется (ошибка данных)
                 
                 db.add(DocumentItem(
                     doc_id=doc.id,
@@ -268,6 +267,8 @@ def update_order_status(
         db.refresh(order)
         return order
         
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print(f"🔴 UPDATE STATUS ERROR: {str(e)}")
