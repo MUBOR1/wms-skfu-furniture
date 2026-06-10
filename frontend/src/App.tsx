@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
@@ -16,6 +16,34 @@ import AnalyticsPage from './pages/AnalyticsPage'
 import AuditPage from './pages/AuditPage'
 import ArchivePage from './pages/ArchivePage'
 import ScrollToTop from './components/ScrollToTop'
+
+// 🔧 КОМПОНЕНТ-ОБЁРТКА С САЙДБАРОМ (ТОЛЬКО ДЛЯ ЗАЩИЩЁННЫХ СТРАНИЦ)
+function AppLayout() {
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('sidebar_collapsed')
+    return saved === 'true'
+  })
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_collapsed', String(isSidebarCollapsed))
+  }, [isSidebarCollapsed])
+
+  return (
+    <div className="flex min-h-screen bg-gray-50">
+      <div className={`fixed left-0 top-0 h-full z-40 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-16' : 'w-64'}`}>
+        <Sidebar 
+          isCollapsed={isSidebarCollapsed} 
+          onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)} 
+        />
+      </div>
+      
+      <main className={`flex-1 overflow-y-auto transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
+        <AppContent />
+        <ScrollToTop />
+      </main>
+    </div>
+  )
+}
 
 function AppContent() {
   return (
@@ -88,40 +116,22 @@ function AppContent() {
   )
 }
 
+// 🔧 ГЛАВНЫЙ КОМПОНЕНТ APP
 export default function App() {
-  // 🔧 СОСТОЯНИЕ СВЁРТЫВАНИЯ (с загрузкой из localStorage)
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
-    const saved = localStorage.getItem('sidebar_collapsed')
-    return saved === 'true'
-  })
-
-  // 🔧 Сохраняем предпочтение при изменении
-  useEffect(() => {
-    localStorage.setItem('sidebar_collapsed', String(isSidebarCollapsed))
-  }, [isSidebarCollapsed])
+  const location = useLocation()
+  const isLoginPage = location.pathname === '/login'
 
   return (
     <AuthProvider>
-      <div className="flex min-h-screen bg-gray-50">
-        
-        <div className={`fixed left-0 top-0 h-full z-40 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-16' : 'w-64'}`}>
-          <Sidebar 
-            isCollapsed={isSidebarCollapsed} 
-            onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)} 
-          />
-        </div>
-        
-        <main 
-          className={`
-            flex-1 overflow-y-auto transition-all duration-300 ease-in-out
-            ${isSidebarCollapsed ? 'ml-16' : 'ml-64'}
-          `}
-        >
-          <AppContent />
-          <ScrollToTop />  {/* 🔧 ДОБАВЬ СЮДА */}
-        </main>
-        
-      </div>
+      {isLoginPage ? (
+        // 🔧 НА СТРАНИЦЕ ЛОГИНА - ТОЛЬКО ЛОГИН (БЕЗ САЙДБАРА)
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+        </Routes>
+      ) : (
+        // 🔧 НА ВСЕХ ОСТАЛЬНЫХ СТРАНИЦАХ - САЙДБАР
+        <AppLayout />
+      )}
     </AuthProvider>
   )
 }

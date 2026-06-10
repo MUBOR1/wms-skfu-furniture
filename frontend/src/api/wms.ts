@@ -152,10 +152,29 @@ export const analytics = {
 }
 
 export const audit = {
-  logs: (params?: { entity_type?: string; start_date?: string }) => {
-    const q = new URLSearchParams(params as any).toString()
-    return request(`/audit/logs${q ? '?' + q : ''}`)
+  logs: (params?: { entity_type?: string; start_date?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.entity_type) q.append('entity_type', params.entity_type)
+    if (params?.start_date) q.append('start_date', params.start_date)
+    if (params?.limit) q.append('limit', String(params.limit))
+    const queryString = q.toString()
+    return request<Array<AuditLog>>(`/audit/logs${queryString ? '?' + queryString : ''}`)
   },
+  // 👇 НОВЫЙ МЕТОД ДЛЯ ДАШБОРДА
+  logsRecent: (limit: number = 10) => 
+    request<Array<AuditLog>>(`/audit/logs/recent?limit=${limit}`),
+}
+
+// 👇 ДОБАВЬТЕ ИНТЕРФЕЙС (в начало файла или перед audit)
+interface AuditLog {
+  id: number
+  user_id: number
+  action: string
+  entity_type: string
+  entity_id: number
+  old_value: string | null
+  new_value: string | null
+  created_at: string
 }
 
 export const catalogExport = async (format: 'csv' | 'xlsx' = 'csv') => {

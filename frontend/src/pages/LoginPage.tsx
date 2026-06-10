@@ -71,7 +71,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-indigo-100 mb-4">
             <Package className="w-8 h-8 text-indigo-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">WMS Фабрики мебели СК</h1>
+          <h1 className="text-2xl font-bold text-gray-900">WMS </h1>
           <p className="text-gray-500">Учебный прототип ВКР • СКФУ</p>
         </div>
 
