@@ -1,6 +1,7 @@
+// pages/ProductsPage.tsx
 import { useEffect, useState, useMemo } from 'react'
-import { catalog, catalogExport, catalogImport, bulkDeleteProducts } from '../api/wms'
-import { Plus, Search, Package, Download, Upload, Edit2, Trash2, X, Save, FolderPlus, FolderMinus, ChevronDown, Archive } from 'lucide-react'
+import { catalog, catalogExport, catalogImport, bulkDeleteProducts, request } from '../api/wms'
+import { Plus, Search, Package, Download, Upload, Edit2, Trash2, X, Save, FolderPlus, FolderMinus, ChevronDown, Archive, Heart, Image as ImageIcon, Star, Camera } from 'lucide-react'
 
 interface Product {
   id: number
@@ -19,6 +20,13 @@ interface LocalCategory {
   product_count: number
 }
 
+interface ProductImage {
+  id: number
+  image_url: string
+  is_main: boolean
+  order: number
+}
+
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<LocalCategory[]>([])
@@ -27,6 +35,8 @@ export default function ProductsPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [productImages, setProductImages] = useState<ProductImage[]>([])
+  const [isUploadingImages, setIsUploadingImages] = useState(false)
   
   const [newProduct, setNewProduct] = useState({
     sku: '', name: '', category: '', weight_kg: 0, 
@@ -44,6 +54,8 @@ export default function ProductsPage() {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [showDeleteMenu, setShowDeleteMenu] = useState<{ id: number; x: number; y: number } | null>(null)
   const [showBulkDeleteMenu, setShowBulkDeleteMenu] = useState(false)
+  
+  const [favorites, setFavorites] = useState<Set<number>>(new Set())
 
   const loadProducts = async () => {
     setIsLoading(true)
@@ -95,7 +107,96 @@ export default function ProductsPage() {
     }
   }
 
-  useEffect(() => { loadProducts(); loadCategories() }, [search, selectedCategory])
+  const loadFavorites = async () => {
+    try {
+      const favs = await catalog.favorites() || []
+      const favIds = new Set<number>(favs.map((f: { id: number }) => f.id))
+      setFavorites(favIds)
+    } catch (err) {
+      console.error('Error loading favorites:', err)
+    }
+  }
+
+  // 🔥 ЗАГРУЗКА ФОТО ТОВАРА
+  const loadProductImages = async (productId: number) => {
+    try {
+      const images = await request<ProductImage[]>(`/catalog/products/${productId}/images`)
+      setProductImages(images || [])
+    } catch (err) {
+      console.error('Error loading images:', err)
+    }
+  }
+
+  // 🔥 ЗАГРУЗКА ФОТО ПРИ ОТКРЫТИИ МОДАЛКИ
+  useEffect(() => {
+    if (editingProduct) {
+      loadProductImages(editingProduct.id)
+    } else {
+      setProductImages([])
+    }
+  }, [editingProduct])
+
+  useEffect(() => { 
+    loadProducts()
+    loadCategories()
+    loadFavorites()
+  }, [search, selectedCategory])
+
+  // 🔥 ЗАГРУЗКА ФОТО
+  const handleUploadImages = async (files: FileList) => {
+    if (!editingProduct) return
+    
+    setIsUploadingImages(true)
+    try {
+      const formData = new FormData()
+      Array.from(files).forEach(file => {
+        formData.append('files', file)
+      })
+      
+      const response = await fetch(`/api/catalog/products/${editingProduct.id}/images`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('wms_token')}`
+        },
+        body: formData
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Ошибка загрузки')
+      }
+      
+      await response.json()
+      await loadProductImages(editingProduct.id)
+      alert('✅ Фото загружены')
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    } finally {
+      setIsUploadingImages(false)
+    }
+  }
+
+  // 🔥 УДАЛЕНИЕ ФОТО
+  const handleDeleteImage = async (imageId: number) => {
+    if (!confirm('Удалить фото?')) return
+    try {
+      await request(`/catalog/products/images/${imageId}`, { method: 'DELETE' })
+      await loadProductImages(editingProduct!.id)
+      alert('✅ Фото удалено')
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
+
+  // 🔥 УСТАНОВКА ГЛАВНОГО ФОТО
+  const handleSetMainImage = async (imageId: number) => {
+    try {
+      await request(`/catalog/products/images/${imageId}/set-main`, { method: 'POST' })
+      await loadProductImages(editingProduct!.id)
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
 
   const filteredProducts = useMemo(() => {
     if (!search.trim()) return products
@@ -114,6 +215,20 @@ export default function ProductsPage() {
       setSelectedProducts([])
     } else {
       setSelectedProducts(filteredProducts.map(p => p.id))
+    }
+  }
+
+  const toggleFavorite = async (productId: number) => {
+    try {
+      await catalog.toggleFavorite(productId)
+      setFavorites(prev => {
+        const next = new Set(prev)
+        if (next.has(productId)) next.delete(productId)
+        else next.add(productId)
+        return next
+      })
+    } catch (err) {
+      console.error('Error toggling favorite:', err)
     }
   }
 
@@ -257,7 +372,6 @@ export default function ProductsPage() {
             <FolderPlus className="w-4 h-4 text-purple-600" /> <span className="hidden sm:inline">Категории</span>
           </button>
           
-          {/* 🔽 КНОПКА ЭКСПОРТА С DROPDOWN */}
           <div className="relative">
             <button onClick={() => setShowExportMenu(!showExportMenu)} className="flex items-center gap-2 bg-white border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-50 text-sm font-medium transition-colors">
               <Download className="w-4 h-4 text-green-600" /> <span className="hidden sm:inline">Экспорт</span> <ChevronDown className="w-4 h-4" />
@@ -291,7 +405,6 @@ export default function ProductsPage() {
         <div className="mb-6 p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between animate-in slide-in-from-top-2">
           <span className="text-sm text-indigo-700 font-medium">✅ Выбрано: <strong>{selectedProducts.length}</strong> товар(ов)</span>
           <div className="flex gap-2 relative">
-            {/* 🔽 DROPDOWN МАССОВОГО УДАЛЕНИЯ */}
             <div className="relative">
               <button onClick={() => setShowBulkDeleteMenu(!showBulkDeleteMenu)} className="flex items-center gap-2 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 text-sm font-medium transition-colors">
                 <Trash2 className="w-4 h-4" /> <span className="hidden sm:inline">Удалить выбранные</span> <ChevronDown className="w-4 h-4" />
@@ -478,7 +591,7 @@ export default function ProductsPage() {
         </select>
       </div>
 
-      {/* 📊 ТАБЛИЦА С ЧЕКБОКСАМИ И КНОПКАМИ УДАЛЕНИЯ */}
+      {/* 📊 ТАБЛИЦА */}
       {isLoading ? (
         <div className="text-center py-16 bg-white rounded-xl border border-gray-200">
           <div className="animate-spin rounded-full h-10 w-10 border-4 border-indigo-600 mx-auto mb-3 border-t-transparent"></div>
@@ -523,7 +636,18 @@ export default function ProductsPage() {
                   <td className="px-4 py-3 text-sm text-gray-600">{p.min_stock} – {p.max_stock}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      {/* 🔽 КНОПКА РЕДАКТИРОВАНИЯ */}
+                      <button 
+                        onClick={() => toggleFavorite(p.id)} 
+                        className={`p-2 rounded-lg transition-colors ${
+                          favorites.has(p.id) 
+                            ? 'text-red-600 bg-red-50' 
+                            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+                        }`}
+                        title={favorites.has(p.id) ? 'Убрать из избранного' : 'Добавить в избранное'}
+                      >
+                        <Heart className={`w-4 h-4 ${favorites.has(p.id) ? 'fill-current' : ''}`} />
+                      </button>
+                      
                       <button 
                         onClick={() => setEditingProduct(p)} 
                         className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" 
@@ -532,7 +656,6 @@ export default function ProductsPage() {
                         <Edit2 className="w-4 h-4" />
                       </button>
                       
-                      {/* 🔽 DROPDOWN УДАЛЕНИЯ */}
                       <div className="relative inline-block">
                         <button 
                           onClick={(e) => { e.stopPropagation(); setShowDeleteMenu({ id: p.id, x: e.currentTarget.getBoundingClientRect().right, y: e.currentTarget.getBoundingClientRect().bottom }) }}
@@ -574,10 +697,10 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* МОДАЛКА РЕДАКТИРОВАНИЯ */}
+      {/* МОДАЛКА РЕДАКТИРОВАНИЯ С ФОТО */}
       {editingProduct && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <form onSubmit={handleUpdate} className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-2xl">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in overflow-y-auto">
+          <form onSubmit={handleUpdate} className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
                 <Edit2 className="w-5 h-5 text-indigo-600" /> Редактировать товар
@@ -586,13 +709,87 @@ export default function ProductsPage() {
                 <X className="w-6 h-6" />
               </button>
             </div>
+
+            {/* 🔥 ФОТО ТОВАРА */}
+            <div className="mb-6 p-4 bg-gray-50 rounded-xl border border-gray-200">
+              <h4 className="font-medium text-gray-900 mb-4 flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-indigo-600" />
+                Фото товара
+              </h4>
+              
+              {/* Список фото */}
+              <div className="flex flex-wrap gap-3 mb-4">
+                {productImages.length === 0 ? (
+                  <div className="text-sm text-gray-400 flex items-center justify-center w-24 h-24 border-2 border-dashed border-gray-300 rounded-lg">
+                    Нет фото
+                  </div>
+                ) : (
+                  productImages.map(img => (
+                    <div key={img.id} className="relative group">
+                      <img 
+                        src={`http://localhost:8000${img.image_url}`}
+                        alt="Товар"
+                        className="w-24 h-24 object-cover rounded-lg border border-gray-200"
+                      />
+                      {img.is_main && (
+                        <div className="absolute top-0 left-0 bg-yellow-500 text-white text-[10px] px-1.5 py-0.5 rounded-tl-lg rounded-br-lg font-bold flex items-center gap-0.5">
+                          <Star className="w-3 h-3 fill-current" /> Главное
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center gap-1">
+                        <button 
+                          type="button"
+                          onClick={() => handleSetMainImage(img.id)}
+                          className="p-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 transition-colors"
+                          title="Сделать главным"
+                        >
+                          <Star className="w-4 h-4" />
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={() => handleDeleteImage(img.id)}
+                          className="p-1.5 bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              
+              {/* Загрузка фото */}
+              <div>
+                <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm">
+                  <Camera className="w-4 h-4" />
+                  Загрузить фото
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        handleUploadImages(e.target.files)
+                      }
+                    }}
+                    disabled={isUploadingImages}
+                  />
+                </label>
+                {isUploadingImages && <span className="ml-3 text-sm text-gray-500">Загрузка...</span>}
+                <p className="text-xs text-gray-400 mt-2">Можно загрузить несколько фото одновременно</p>
+              </div>
+            </div>
+
+            {/* Основные поля */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">SKU</label>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">SKU *</label>
                 <input value={editingProduct.sku} onChange={e => setEditingProduct({...editingProduct, sku: e.target.value})} className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm" required />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">Название</label>
+                <label className="block text-xs font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">Название *</label>
                 <input value={editingProduct.name} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm" required />
               </div>
               <div className="md:col-span-2">

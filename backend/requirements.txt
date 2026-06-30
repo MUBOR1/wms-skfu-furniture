@@ -11,3 +11,5 @@ psycopg[binary]  # ← Без фиксированной версии, pip вы�
 # Auth & Security
 passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
+python-multipart>=0.0.6  # Для обработки FormData
+openpyxl>=3.1.0

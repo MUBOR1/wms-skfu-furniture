@@ -5,8 +5,10 @@ from models.user import User
 from schemas.auth import UserCreate, UserLogin, Token, UserResponse
 from core.security import get_password_hash, verify_password, create_access_token, get_current_user
 from datetime import timedelta
+from routers.notifications import create_notification
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -18,12 +20,27 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
         login=user_data.login,
         password_hash=get_password_hash(user_data.password),
         full_name=user_data.full_name,
-        role=user_data.role  # ← НОВОЕ: берём роль из запроса
+        role=user_data.role
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+
+    # 🔥 УВЕДОМЛЕНИЕ ДЛЯ АДМИНОВ (если новый пользователь — клиент)
+    if new_user.role == 'client':
+        admins = db.query(User).filter(User.role == 'admin').all()
+        for admin in admins:
+            create_notification(
+                db=db,
+                user_id=admin.id,
+                type="system",
+                title="👤 Новый пользователь",
+                message=f"Зарегистрирован новый клиент: {new_user.login}",
+                link="/admin/users"
+            )
+
     return new_user
+
 
 @router.post("/login", response_model=Token)
 def login(user_data: UserLogin, db: Session = Depends(get_db)):
@@ -36,6 +53,7 @@ def login(user_data: UserLogin, db: Session = Depends(get_db)):
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return {"access_token": access_token, "token_type": "bearer"}
+
 
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):

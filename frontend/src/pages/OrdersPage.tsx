@@ -1,14 +1,20 @@
 import { useEffect, useState, useMemo } from 'react'
-import { orders, catalog } from '../api/wms'
+import { orders, catalog, request } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
-import { Plus, CheckCircle, Clock, Truck, XCircle, Package, Eye, X, Lock, LockOpen, Search, Filter, Calendar, XCircle as XIcon, RotateCcw } from 'lucide-react'
+import { 
+  Plus, CheckCircle, Clock, Truck, XCircle, Package, Eye, X, 
+  Lock, LockOpen, Search, Filter, Calendar, XCircle as XIcon, 
+  RotateCcw, Check, AlertCircle 
+} from 'lucide-react'
 
 const statusConfig: Record<string, { label: string; color: string; icon: React.ElementType }> = {
-  pending: { label: 'Ожидает', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
-  processing: { label: 'В обработке', color: 'bg-blue-100 text-blue-700', icon: Package },
-  shipped: { label: 'Отгружен', color: 'bg-indigo-100 text-indigo-700', icon: Truck },
+  waiting_approval: { label: 'Ожидает подтверждения', color: 'bg-orange-100 text-orange-700', icon: Clock },
+  pending: { label: 'В обработке', color: 'bg-blue-100 text-blue-700', icon: Package },
+  processing: { label: 'Обрабатывается', color: 'bg-indigo-100 text-indigo-700', icon: Package },
+  shipped: { label: 'Отгружен', color: 'bg-purple-100 text-purple-700', icon: Truck },
   delivered: { label: 'Доставлен', color: 'bg-green-100 text-green-700', icon: CheckCircle },
   cancelled: { label: 'Отменён', color: 'bg-red-100 text-red-700', icon: XCircle },
+  returned: { label: 'Возвращён', color: 'bg-pink-100 text-pink-700', icon: RotateCcw },
 }
 
 const formatDateKey = (dateStr: string): string => {
@@ -50,7 +56,6 @@ export default function OrdersPage() {
   const [productSearch, setProductSearch] = useState('')
   const [productCategory, setProductCategory] = useState<string>('all')
 
-  // 🔧 ЗАГРУЗКА СОХРАНЁННОЙ ФОРМЫ
   useEffect(() => {
     const savedForm = sessionStorage.getItem('order_form_data')
     if (savedForm) {
@@ -65,7 +70,6 @@ export default function OrdersPage() {
     }
   }, [])
 
-  // 🔧 СОХРАНЕНИЕ ФОРМЫ
   useEffect(() => {
     if (newOrder.comment || newOrder.items.length > 0) {
       sessionStorage.setItem('order_form_data', JSON.stringify(newOrder))
@@ -173,11 +177,68 @@ export default function OrdersPage() {
     }
   }
 
+  // 🔥 ОБНОВЛЕНИЕ СТАТУСА
   const handleStatusChange = async (id: number, status: string) => {
     try {
       await orders.updateStatus(id, status)
-      setOrdersList(prev => prev.map(o => o.id === id ? { ...o, status } : o))
-    } catch (err: any) { alert('❌ ' + (err.message)) }
+      const updatedOrders = await orders.list()
+      setOrdersList(Array.isArray(updatedOrders) ? updatedOrders : [])
+      alert('✅ Статус обновлён')
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
+
+  // 🔥 ПОДТВЕРДИТЬ ОТМЕНУ
+  const handleApproveCancel = async (orderId: number) => {
+    if (!confirm('Подтвердить отмену заказа? Товары будут возвращены на склад.')) return
+    try {
+      await request(`/orders/${orderId}/cancel-approve`, { method: 'PATCH' })
+      alert('✅ Заказ отменён. Товары возвращены на склад.')
+      const updatedOrders = await orders.list()
+      setOrdersList(Array.isArray(updatedOrders) ? updatedOrders : [])
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
+
+  // 🔥 ОТКЛОНИТЬ ОТМЕНУ
+  const handleRejectCancel = async (orderId: number) => {
+    if (!confirm('Отклонить запрос на отмену?')) return
+    try {
+      await request(`/orders/${orderId}/cancel-reject`, { method: 'PATCH' })
+      alert('✅ Запрос на отмену отклонён')
+      const updatedOrders = await orders.list()
+      setOrdersList(Array.isArray(updatedOrders) ? updatedOrders : [])
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
+
+  // 🔥 ПОДТВЕРДИТЬ ВОЗВРАТ
+  const handleApproveReturn = async (orderId: number) => {
+    if (!confirm('Подтвердить возврат заказа? Товары будут возвращены на склад.')) return
+    try {
+      await request(`/orders/${orderId}/return-approve`, { method: 'PATCH' })
+      alert('✅ Возврат подтверждён. Товары возвращены на склад.')
+      const updatedOrders = await orders.list()
+      setOrdersList(Array.isArray(updatedOrders) ? updatedOrders : [])
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
+  }
+
+  // 🔥 ОТКЛОНИТЬ ВОЗВРАТ
+  const handleRejectReturn = async (orderId: number) => {
+    if (!confirm('Отклонить запрос на возврат?')) return
+    try {
+      await request(`/orders/${orderId}/return-reject`, { method: 'PATCH' })
+      alert('✅ Запрос на возврат отклонён')
+      const updatedOrders = await orders.list()
+      setOrdersList(Array.isArray(updatedOrders) ? updatedOrders : [])
+    } catch (err: any) {
+      alert('❌ Ошибка: ' + err.message)
+    }
   }
 
   const updateItem = (idx: number, field: string, val: any) => {
@@ -204,7 +265,6 @@ export default function OrdersPage() {
     setNewOrder(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }))
   }
 
-  // 🔧 ФУНКЦИЯ ОЧИСТКИ ФОРМЫ
   const clearOrderForm = () => {
     if (newOrder.items.length > 0 || newOrder.comment) {
       if (confirm('Очистить форму заказа? Все добавленные товары будут удалены.')) {
@@ -223,7 +283,6 @@ export default function OrdersPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      {/* 🔝 ЗАГОЛОВОК И КНОПКИ */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-gray-900">📦 Заказы клиентов</h2>
         <div className="flex items-center gap-2">
@@ -267,7 +326,6 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* 🔍 ПАНЕЛЬ ФИЛЬТРОВ */}
       {showFilters && (
         <div className="mb-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between mb-3">
@@ -335,7 +393,6 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* ➕ Форма создания заказа */}
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-white rounded-xl border border-gray-200 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between">
@@ -358,7 +415,6 @@ export default function OrdersPage() {
           <div className="border-t border-gray-200 pt-4">
             <h4 className="font-medium text-gray-700 mb-3">Позиции заказа</h4>
             
-            {/* 🔍 ПОИСК И ФИЛЬТР ДЛЯ ВЫБОРА ТОВАРА */}
             <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <div className="relative">
@@ -383,7 +439,6 @@ export default function OrdersPage() {
                 </select>
               </div>
               
-              {/* 🔽 ВЫПАДАЮЩИЙ СПИСОК */}
               {filteredProducts.length > 0 && (
                 <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg bg-white">
                   {filteredProducts.map(p => {
@@ -436,7 +491,6 @@ export default function OrdersPage() {
               )}
             </div>
             
-            {/* 📦 ВЫБРАННЫЕ ПОЗИЦИИ ЗАКАЗА - КРАСИВЫЙ СПИСОК */}
             {newOrder.items.length > 0 && (
               <div className="space-y-4">
                 {newOrder.items.map((item, idx) => {
@@ -446,13 +500,11 @@ export default function OrdersPage() {
                   
                   return (
                     <div key={idx} className="flex flex-wrap sm:flex-nowrap items-center gap-3 p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow">
-                      {/* 📦 Информация о товаре */}
                       <div className="flex-1 min-w-[180px]">
                         <div className="text-sm font-semibold text-gray-900 truncate">{selectedProduct?.name || `Товар #${item.product_id}`}</div>
                         <div className="text-xs text-gray-500 font-mono">{selectedProduct?.sku}</div>
                       </div>
 
-                      {/* 🔢 Количество + Наличие */}
                       <div className="flex items-center gap-2">
                         <input
                           type="number"
@@ -468,7 +520,6 @@ export default function OrdersPage() {
                         </span>
                       </div>
 
-                      {/* 💰 Цена */}
                       <div className="relative">
                         <input
                           type="number"
@@ -483,7 +534,6 @@ export default function OrdersPage() {
                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">₽</span>
                       </div>
 
-                      {/* ❌ Удалить */}
                       <button
                         type="button"
                         onClick={() => removeItem(idx)}
@@ -505,7 +555,6 @@ export default function OrdersPage() {
             )}
           </div>
           
-          {/* ИТОГО */}
           {newOrder.items.length > 0 && (
             <div className="border-t border-gray-200 pt-4 flex justify-between items-center bg-indigo-50 p-4 rounded-lg">
               <div className="text-sm text-gray-600">
@@ -523,7 +572,6 @@ export default function OrdersPage() {
         </form>
       )}
 
-      {/* 📋 ТАБЛИЦА ЗАКАЗОВ - КРАСИВЫЙ СПИСОК */}
       {isLoading ? (
         <div className="text-center py-12"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent mx-auto"></div></div>
       ) : Object.keys(filteredAndGroupedOrders).length === 0 ? (
@@ -538,7 +586,6 @@ export default function OrdersPage() {
         <div className="space-y-6">
           {Object.entries(filteredAndGroupedOrders).map(([dateKey, dayOrders]) => (
             <div key={dateKey}>
-              {/* 🔵 СИНЯЯ ПОЛОСКА ДАТЫ (как в документах) */}
               <div className="sticky top-0 z-10 bg-indigo-50/95 backdrop-blur-sm px-4 py-2.5 border-b-2 border-indigo-200 flex items-center gap-2 rounded-t-lg">
                 <Calendar className="w-4 h-4 text-indigo-600" />
                 <h3 className="font-semibold text-indigo-900">{dateKey}</h3>
@@ -566,10 +613,25 @@ export default function OrdersPage() {
                   <tbody className="divide-y divide-gray-200">
                     {dayOrders.map((order, idx) => {
                       const st = statusConfig[order.status] || statusConfig.pending
+                      const hasCancelRequest = order.comment?.includes('[ЗАПРОС НА ОТМЕНУ]')
+                      const hasReturnRequest = order.comment?.includes('[ЗАПРОС НА ВОЗВРАТ]')
+                      
                       return (
                         <tr key={order.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-center text-sm text-gray-500 font-mono">{idx + 1}.</td>
-                          <td className="px-4 py-3 font-mono text-sm font-medium text-gray-900">{order.order_number}</td>
+                          <td className="px-4 py-3 font-mono text-sm font-medium text-gray-900">
+                            {order.order_number}
+                            {hasCancelRequest && (
+                              <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                ⏳ Отмена
+                              </span>
+                            )}
+                            {hasReturnRequest && (
+                              <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+                                ⏳ Возврат
+                              </span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 text-sm text-gray-500">{new Date(order.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</td>
                           <td className="px-4 py-3 font-semibold text-gray-900">{order.total_amount.toLocaleString('ru-RU')} ₽</td>
                           <td className="px-4 py-3">
@@ -585,9 +647,55 @@ export default function OrdersPage() {
                           </td>
                           {hasRole(['admin', 'warehouse_manager']) && isManagementVisible && (
                             <td className="px-4 py-3">
-                              <select value={order.status} onChange={e => handleStatusChange(order.id, e.target.value)} className="p-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white">
-                                {Object.keys(statusConfig).map(s => <option key={s} value={s}>{statusConfig[s].label}</option>)}
-                              </select>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <select 
+                                  value={order.status} 
+                                  onChange={e => handleStatusChange(order.id, e.target.value)} 
+                                  className="p-1 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                                >
+                                  {Object.keys(statusConfig).map(s => (
+                                    <option key={s} value={s}>{statusConfig[s].label}</option>
+                                  ))}
+                                </select>
+                                
+                                {hasCancelRequest && (
+                                  <>
+                                    <button
+                                      onClick={() => handleApproveCancel(order.id)}
+                                      className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
+                                      title="Подтвердить отмену"
+                                    >
+                                      <Check className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectCancel(order.id)}
+                                      className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
+                                      title="Отклонить отмену"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                )}
+                                
+                                {hasReturnRequest && (
+                                  <>
+                                    <button
+                                      onClick={() => handleApproveReturn(order.id)}
+                                      className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
+                                      title="Подтвердить возврат"
+                                    >
+                                      <Check className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectReturn(order.id)}
+                                      className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
+                                      title="Отклонить возврат"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </td>
                           )}
                         </tr>
@@ -601,24 +709,94 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* 👇 МОДАЛКА ПРОСМОТРА ЗАКАЗА - КРАСИВАЯ */}
       {selectedOrder && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in zoom-in-95">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden animate-in zoom-in-95">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
               <div>
                 <h3 className="text-lg font-bold flex items-center gap-2 text-gray-900">
                   📦 Заказ: {selectedOrder.order_number}
-                  <span className="text-xs font-normal text-gray-500">от {new Date(selectedOrder.created_at).toLocaleDateString()}</span>
                 </h3>
+                <p className="text-sm text-gray-500">
+                  от {selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  }) : 'Дата не указана'}
+                </p>
               </div>
-              <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X className="w-5 h-5 text-gray-500" /></button>
+              <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
             </div>
-            <div className="p-6 max-h-[60vh] overflow-y-auto">
+
+            <div className="p-6 overflow-y-auto max-h-[60vh]">
               {isInfoLoading ? (
                 <div className="flex justify-center py-8"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent"></div></div>
               ) : (
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">👤 Клиент</h4>
+                      <p className="text-lg font-semibold text-gray-900">
+                        {selectedOrder.client?.full_name || selectedOrder.client?.login || 'Клиент не указан'}
+                      </p>
+                      <p className="text-sm text-gray-600">ID: {selectedOrder.client_id}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">📞 Контакты</h4>
+                      <p className="text-gray-900">{selectedOrder.client_phone || 'Не указан'}</p>
+                      <p className="text-sm text-gray-600">{selectedOrder.client_email || 'Email не указан'}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-green-50 rounded-lg border border-green-200">
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">🚚 Доставка</h4>
+                      <p className="text-gray-900">
+                        {selectedOrder.delivery_method === 'pickup' ? '📍 Самовывоз' : '🏠 Курьер'}
+                      </p>
+                      {selectedOrder.delivery_method === 'courier' && selectedOrder.delivery_address && (
+                        <p className="text-sm text-gray-600">Адрес: {selectedOrder.delivery_address}</p>
+                      )}
+                      {selectedOrder.delivery_method === 'pickup' && selectedOrder.pickup_point_id && (
+                        <p className="text-sm text-gray-600">ПВЗ ID: {selectedOrder.pickup_point_id}</p>
+                      )}
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">📊 Статус</h4>
+                      <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${
+                        statusConfig[selectedOrder.status]?.color || 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {statusConfig[selectedOrder.status]?.icon && (() => {
+                          const Icon = statusConfig[selectedOrder.status].icon
+                          return <Icon className="w-4 h-4" />
+                        })()}
+                        {statusConfig[selectedOrder.status]?.label || selectedOrder.status}
+                      </span>
+                      {selectedOrder.comment?.includes('[ЗАПРОС НА ОТМЕНУ]') && (
+                        <div className="mt-1 text-xs font-medium text-red-600 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" /> Запрос на отмену
+                        </div>
+                      )}
+                      {selectedOrder.comment?.includes('[ЗАПРОС НА ВОЗВРАТ]') && (
+                        <div className="mt-1 text-xs font-medium text-orange-600 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3" /> Запрос на возврат
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedOrder.comment && (
+                    <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">💬 Комментарий</h4>
+                      <p className="text-gray-800 whitespace-pre-wrap">{selectedOrder.comment}</p>
+                    </div>
+                  )}
+
+                  <h4 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">🛒 Товары в заказе</h4>
                   <table className="w-full text-sm">
                     <thead className="bg-gray-100 text-gray-600">
                       <tr>
@@ -636,9 +814,7 @@ export default function OrdersPage() {
                               {item.product?.name || `Товар #${item.product_id}`}
                             </div>
                             {item.product?.sku && (
-                              <div className="text-xs text-gray-400 font-mono">
-                                {item.product.sku}
-                              </div>
+                              <div className="text-xs text-gray-400 font-mono">{item.product.sku}</div>
                             )}
                           </td>
                           <td className="px-4 py-3 text-center font-semibold text-indigo-600">{item.quantity} шт.</td>
@@ -654,16 +830,14 @@ export default function OrdersPage() {
                       </tr>
                     </tfoot>
                   </table>
-                  {selectedOrder.comment && (
-                    <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
-                      💬 Комментарий: {selectedOrder.comment}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
+
             <div className="p-4 border-t border-gray-200 bg-gray-50 flex justify-end">
-              <button onClick={() => setSelectedOrder(null)} className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium transition-colors">Закрыть</button>
+              <button onClick={() => setSelectedOrder(null)} className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg font-medium transition-colors">
+                Закрыть
+              </button>
             </div>
           </div>
         </div>

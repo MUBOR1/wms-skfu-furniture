@@ -3,7 +3,7 @@ import { documents, catalog, analytics } from '../api/wms'
 import { useAuth } from '../context/AuthContext'
 import { 
   FileText, Plus, CheckCircle, Clock, XCircle, Eye, Edit2, Trash2, X, Save, 
-  Search, Filter, Calendar, XCircle as XIcon, RotateCcw
+  Search, Filter, Calendar, XCircle as XIcon, RotateCcw, Download, FileSpreadsheet
 } from 'lucide-react'
 
 const formatTime = (date: string | null | undefined): string => {
@@ -96,6 +96,10 @@ export default function DocumentsPage() {
 
   const [productSearch, setProductSearch] = useState('')
   const [productCategory, setProductCategory] = useState<string>('all')
+
+  // 🔥 ОПРЕДЕЛЯЕМ РОЛИ
+  const isAdminOrManager = hasRole(['admin', 'warehouse_manager'])
+  const isWorker = hasRole(['warehouse_worker'])
 
   const loadDocs = async () => {
     try {
@@ -236,6 +240,112 @@ export default function DocumentsPage() {
     if (err?.response?.data?.detail) return err.response.data.detail
     return 'Неизвестная ошибка. Проверьте консоль (F12)'
   }
+
+// 🔥 ЭКСПОРТ В EXCEL
+const handleExportExcel = async (docId: number) => {
+  try {
+    // 🔥 ПРАВИЛЬНО ПОЛУЧАЕМ ТОКЕН ИЗ SESSIONSTORAGE
+    const saved = sessionStorage.getItem('wms_auth')
+    let token = null
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        token = parsed.token
+      } catch {}
+    }
+    if (!token) {
+      token = localStorage.getItem('wms_token')
+    }
+    
+    console.log('📤 Экспорт Excel, токен:', token ? 'есть' : 'нет')
+    
+    const response = await fetch(`/api/documents/${docId}/export-excel`, {
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    })
+    
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Ошибка экспорта' }))
+      throw new Error(err.detail || `Ошибка экспорта: ${response.status}`)
+    }
+    
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    
+    const contentDisposition = response.headers.get('content-disposition')
+    let filename = `Документ_${docId}.xlsx`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+      if (match && match[1]) filename = match[1].replace(/['"]/g, '')
+    }
+    
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (err: any) {
+    console.error('❌ Ошибка экспорта Excel:', err)
+    alert('❌ ' + getErrorMessage(err))
+  }
+}
+
+// 🔥 ЭКСПОРТ В CSV
+const handleExportCSV = async (docId: number) => {
+  try {
+    // 🔥 ПРАВИЛЬНО ПОЛУЧАЕМ ТОКЕН ИЗ SESSIONSTORAGE
+    const saved = sessionStorage.getItem('wms_auth')
+    let token = null
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        token = parsed.token
+      } catch {}
+    }
+    if (!token) {
+      token = localStorage.getItem('wms_token')
+    }
+    
+    console.log('📤 Экспорт CSV, токен:', token ? 'есть' : 'нет')
+    
+    const response = await fetch(`/api/documents/${docId}/export-csv`, {
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    })
+    
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: 'Ошибка экспорта' }))
+      throw new Error(err.detail || `Ошибка экспорта: ${response.status}`)
+    }
+    
+    const blob = await response.blob()
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    
+    const contentDisposition = response.headers.get('content-disposition')
+    let filename = `Документ_${docId}.csv`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+      if (match && match[1]) filename = match[1].replace(/['"]/g, '')
+    }
+    
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (err: any) {
+    console.error('❌ Ошибка экспорта CSV:', err)
+    alert('❌ ' + getErrorMessage(err))
+  }
+}
 
   const handleViewDetails = async (id: number) => {
     setIsDetailsLoading(true)
@@ -397,13 +507,75 @@ export default function DocumentsPage() {
     }
   }
 
+  // 🔥 ФУНКЦИЯ ДЛЯ ДОБАВЛЕНИЯ ТОВАРА С ВЫБОРОМ ЯЧЕЙКИ
+  const handleAddProduct = (product: any) => {
+    const alreadyExists = (editingDoc ? editItems : docItems).find(item => item.product_id === product.id)
+    
+    if (alreadyExists) {
+      const stockList = stockByProduct[product.id] || []
+      if (stockList.length === 0) {
+        alert('⚠️ Товар не найден на складе')
+        return
+      }
+      
+      let cellOptions = stockList.map((s, i) => `${i + 1}. ${s.cell_code} (${s.quantity} шт.)`).join('\n')
+      const cellCodes = stockList.map(s => s.cell_code).join(', ')
+      
+      const selectedCell = prompt(
+        `📍 Товар уже добавлен. Выберите ячейку для добавления новой позиции:\n\n${cellOptions}\n\nВведите код ячейки (${cellCodes}):`,
+        stockList[0]?.cell_code || ''
+      )
+      
+      if (!selectedCell) return
+      
+      const stock = stockList.find(s => s.cell_code === selectedCell)
+      if (!stock) {
+        alert('❌ Ячейка не найдена. Доступные ячейки: ' + cellCodes)
+        return
+      }
+      
+      const cell = cells.find(c => c.code === selectedCell)
+      if (!cell) {
+        alert('❌ Ячейка не найдена')
+        return
+      }
+      
+      const baseItem: any = { 
+        product_id: product.id, 
+        quantity: 1
+      }
+      
+      if (currentType === 'ship' || currentType === 'transfer') {
+        baseItem.from_cell_id = cell.id
+      }
+      if (currentType === 'receive' || currentType === 'transfer' || currentType === 'adjust') {
+        baseItem.to_cell_id = cell.id
+      }
+      
+      if (editingDoc) {
+        setEditItems(prev => [...prev, baseItem])
+      } else {
+        setDocItems(prev => [...prev, baseItem])
+      }
+      return
+    }
+    
+    const baseItem = { product_id: product.id, quantity: 1, ...getDefaultCells(currentType) }
+    if (editingDoc) {
+      setEditItems(prev => [...prev, baseItem])
+    } else {
+      setDocItems(prev => [...prev, baseItem])
+    }
+    setProductSearch('')
+  }
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* 🔝 ЗАГОЛОВОК И КНОПКИ */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold text-gray-900">📄 Складские документы</h2>
         <div className="flex items-center gap-2">
-          {hasRole(['admin', 'warehouse_manager']) && (
+          {isAdminOrManager && (
             <>
               <button
                 onClick={() => setShowFilters(!showFilters)}
@@ -477,8 +649,8 @@ export default function DocumentsPage() {
         </div>
       )}
 
-      {/* Форма создания/редактирования */}
-      {(showForm || editingDoc) && (
+      {/* Форма создания/редактирования (только для админ/менеджер) */}
+      {(showForm || editingDoc) && isAdminOrManager && (
         <form onSubmit={editingDoc ? handleUpdate : handleCreate} 
               className="mb-6 p-4 bg-white rounded-xl border border-gray-200 shadow-sm space-y-4 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between">
@@ -526,7 +698,6 @@ export default function DocumentsPage() {
           <div className="border-t border-gray-200 pt-4">
             <h4 className="font-medium text-gray-700 mb-3">Позиции документа</h4>
             
-            {/* 🔍 ПОИСК И ФИЛЬТР ТОВАРОВ */}
             <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                 <div className="relative">
@@ -539,7 +710,6 @@ export default function DocumentsPage() {
                 </select>
               </div>
               
-              {/* 🔽 ВЫПАДАЮЩИЙ СПИСОК */}
               {filteredProducts.length > 0 && (
                 <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg bg-white">
                   {filteredProducts.map(p => {
@@ -548,28 +718,30 @@ export default function DocumentsPage() {
                     const maxStock = p.max_stock || 0
                     const isLow = totalQty > 0 && totalQty < minStock
                     const isCritical = totalQty === 0
+                    const stockList = stockByProduct[p.id] || []
                     
                     return (
-                      <div key={p.id} className="px-4 py-3 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-b-0 flex justify-between items-center"
-                        onClick={() => {
-                          const alreadyExists = (editingDoc ? editItems : docItems).find(item => item.product_id === p.id)
-                          if (alreadyExists) { alert('⚠️ Товар уже добавлен'); return }
-                          const baseItem = { product_id: p.id, quantity: 1, ...getDefaultCells(currentType) }
-                          if (editingDoc) setEditItems(prev => [...prev, baseItem])
-                          else setDocItems(prev => [...prev, baseItem])
-                          setProductSearch('')
-                        }}>
-                        <div className="flex-1">
-                          <span className="font-mono text-xs text-gray-500">{p.sku}</span>
-                          <span className="ml-2 font-medium text-sm">{p.name}</span>
-                          {p.category && <span className="ml-2 text-xs text-gray-400">({p.category})</span>}
-                        </div>
-                        <div className="text-right">
-                          <div className={`text-sm font-medium ${isCritical ? 'text-red-600' : isLow ? 'text-yellow-600' : 'text-green-600'}`}>
-                            {totalQty} шт.
+                      <div key={p.id} className="px-4 py-3 hover:bg-indigo-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                        onClick={() => handleAddProduct(p)}
+                      >
+                        <div className="flex justify-between items-center">
+                          <div className="flex-1">
+                            <span className="font-mono text-xs text-gray-500">{p.sku}</span>
+                            <span className="ml-2 font-medium text-sm">{p.name}</span>
+                            {p.category && <span className="ml-2 text-xs text-gray-400">({p.category})</span>}
                           </div>
-                          <div className="text-xs text-gray-400">
-                            {minStock} / {maxStock}
+                          <div className="text-right">
+                            <div className={`text-sm font-medium ${isCritical ? 'text-red-600' : isLow ? 'text-yellow-600' : 'text-green-600'}`}>
+                              {totalQty} шт.
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              {minStock} / {maxStock}
+                            </div>
+                            {stockList.length > 0 && (
+                              <div className="text-[10px] text-gray-400 mt-0.5">
+                                📍 {stockList.map(s => `${s.cell_code}(${s.quantity})`).join(' ')}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -579,7 +751,6 @@ export default function DocumentsPage() {
               )}
             </div>
             
-            {/* 📦 ПОЗИЦИИ ДОКУМЕНТА - КРАСИВЫЙ СПИСОК */}
             {(editingDoc ? editItems : docItems).map((item, idx) => {
               const product = products.find(p => p.id === item.product_id)
               const totalQty = getTotalQuantity(item.product_id)
@@ -588,16 +759,20 @@ export default function DocumentsPage() {
               const isLow = totalQty > 0 && totalQty < minStock
               const isOverstock = maxStock > 0 && totalQty > maxStock 
               const isCritical = totalQty === 0
+              const fromCell = getCellById(item.from_cell_id)
+              const toCell = getCellById(item.to_cell_id)
               
               return (
                 <div key={idx} className="flex flex-wrap sm:flex-nowrap items-center gap-3 p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow mb-4">
-                  {/* 📦 Информация о товаре */}
                   <div className="flex-1 min-w-[180px]">
                     <div className="text-sm font-semibold text-gray-900 truncate">{product?.name || `Товар #${item.product_id}`}</div>
                     <div className="text-xs text-gray-500 font-mono">{product?.sku}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {fromCell && <span className="inline-block mr-2">📤 {fromCell.code}</span>}
+                      {toCell && <span className="inline-block">📥 {toCell.code}</span>}
+                    </div>
                   </div>
 
-                  {/* 🔢 Количество */}
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
@@ -611,14 +786,13 @@ export default function DocumentsPage() {
                     <span className={`text-xs font-medium px-2 py-1 rounded-full ${
                       isCritical ? 'bg-red-100 text-red-700' : 
                       isLow ? 'bg-yellow-100 text-yellow-700' : 
-                      isOverstock ? 'bg-purple-100 text-purple-700' :  // ← Новый цвет
+                      isOverstock ? 'bg-purple-100 text-purple-700' :
                       'bg-green-100 text-green-700'
                     }`}>
                       {totalQty} шт.
                     </span>
                   </div>
 
-                  {/* 📍 Из ячейки */}
                   {(currentType === 'ship' || currentType === 'transfer') && (
                     <div className="w-32">
                       <select 
@@ -641,7 +815,6 @@ export default function DocumentsPage() {
                     </div>
                   )}
                   
-                  {/* 📍 В ячейку */}
                   {(currentType === 'receive' || currentType === 'transfer' || currentType === 'adjust') && (
                     <div className="w-32">
                       <select 
@@ -664,44 +837,6 @@ export default function DocumentsPage() {
                     </div>
                   )}
 
-                  {/* 👁️ КНОПКА ИНФО - ВЕРНУЛ */}
-                  {(currentType === 'ship' || currentType === 'transfer' || currentType === 'adjust') && product && (
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        const totalQty = getTotalQuantity(item.product_id)
-                        const minStock = product.min_stock || 0
-                        const maxStock = product.max_stock || 0
-                        const stock = stockByProduct[item.product_id] || []
-                        
-                        let message = `📍 Информация о товаре:\n\n`
-                        message += `📦 ${product.name}\n`
-                        message += `🔖 ${product.sku}\n\n`
-                        message += `📊 Общий остаток: ${totalQty} шт.\n`
-                        message += `📌 Мин: ${minStock}\n`
-                        message += `📌 Макс: ${maxStock}\n\n`
-                        
-                        if (stock.length > 0) {
-                          message += `📍 Места хранения:\n`
-                          stock.forEach(s => {
-                            message += `  • ${s.cell_code}: ${s.quantity} шт.\n`
-                          })
-                        } else {
-                          message += `⚠️ Товар не размещён на складе`
-                        }
-                        
-                        message += `\n\n${totalQty < minStock ? '⚠️ Требуется пополнение!' : totalQty > maxStock ? '📦 Переизбыток!' : '✅ Норма'}`
-                        
-                        alert(message)
-                      }}
-                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0"
-                      title="Показать информацию"
-                    >
-                      <Eye className="w-5 h-5" />
-                    </button>
-                  )}
-
-                  {/* ❌ Удалить */}
                   <button
                     type="button"
                     onClick={() => editingDoc ? setEditItems(prev => prev.filter((_, i) => i !== idx)) : setDocItems(prev => prev.filter((_, i) => i !== idx))}
@@ -743,7 +878,6 @@ export default function DocumentsPage() {
         <div className="space-y-6">
           {Object.entries(filteredAndGroupedDocs).map(([dateKey, dayDocs]) => (
             <div key={dateKey}>
-              {/* 🔵 СИНЯЯ ПОЛОСКА ДАТЫ (как в заказах) */}
               <div className="sticky top-0 z-10 bg-indigo-50/95 backdrop-blur-sm px-4 py-2.5 border-b-2 border-indigo-200 flex items-center gap-2 rounded-t-lg">
                 <Calendar className="w-4 h-4 text-indigo-600" />
                 <h3 className="font-semibold text-indigo-900">{dateKey}</h3>
@@ -769,6 +903,10 @@ export default function DocumentsPage() {
                     {dayDocs.map((doc, idx) => {
                       const status = statusConfig[doc.status] || statusConfig.draft
                       const isDraft = doc.status === 'draft'
+                      const isWorkerRole = hasRole(['warehouse_worker'])
+                      const isManagerRole = hasRole(['admin', 'warehouse_manager'])
+                      const isAdjust = doc.type === 'adjust'
+                      
                       return (
                         <tr key={doc.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-center text-sm text-gray-500 font-mono">{idx + 1}.</td>
@@ -786,16 +924,75 @@ export default function DocumentsPage() {
                             </button>
                           </td>
                           <td className="px-4 py-3">
-                            <div className="flex items-center justify-center gap-1">
-                              {isDraft && hasRole(['admin', 'warehouse_manager']) && (
+                            <div className="flex items-center justify-center gap-1 flex-wrap">
+                              {/* 🔥 КНОПКИ ЭКСПОРТА - ДЛЯ ВСЕХ ДОКУМЕНТОВ */}
+                              <button 
+                                onClick={() => handleExportExcel(doc.id)} 
+                                className="p-2 text-green-700 hover:bg-green-50 rounded-lg transition-colors" 
+                                title="Экспорт в Excel"
+                              >
+                                <FileSpreadsheet className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => handleExportCSV(doc.id)} 
+                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" 
+                                title="Экспорт в CSV"
+                              >
+                                <Download className="w-4 h-4" />
+                              </button>
+
+                              {isDraft && (
                                 <>
-                                  <button onClick={() => handleEdit(doc.id)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors" title="Редактировать"><Edit2 className="w-4 h-4" /></button>
-                                  <button onClick={() => handleCancel(doc.id)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg transition-colors" title="Отменить"><XCircle className="w-4 h-4" /></button>
-                                  <button onClick={() => handleDelete(doc.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Удалить"><Trash2 className="w-4 h-4" /></button>
-                                  <button onClick={() => handleComplete(doc.id)} className="ml-1 text-green-700 hover:text-green-900 text-xs font-medium hover:underline px-2 py-1">Провести</button>
+                                  {/* 🔥 Админ и Менеджер: редактировать, отменить, удалить */}
+                                  {isManagerRole && (
+                                    <>
+                                      <button onClick={() => handleEdit(doc.id)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Редактировать">
+                                        <Edit2 className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => handleCancel(doc.id)} className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg transition-colors" title="Отменить">
+                                        <XCircle className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => handleDelete(doc.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Удалить">
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </>
+                                  )}
+                                  
+                                  {/* 🔥 КЛАДОВЩИК: может провести ТОЛЬКО НЕ корректировку */}
+                                  {isWorkerRole && !isManagerRole && !isAdjust && (
+                                    <button 
+                                      onClick={() => handleComplete(doc.id)} 
+                                      className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition-colors"
+                                    >
+                                      Провести
+                                    </button>
+                                  )}
+                                  
+                                  {/* 🔥 КОРРЕКТИРОВКУ проводит только админ/менеджер */}
+                                  {isAdjust && isManagerRole && (
+                                    <button 
+                                      onClick={() => handleComplete(doc.id)} 
+                                      className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition-colors"
+                                    >
+                                      Провести
+                                    </button>
+                                  )}
+                                  
+                                  {/* 🔥 Если пользователь и админ, и кладовщик - может провести всё */}
+                                  {isWorkerRole && isManagerRole && (
+                                    <button 
+                                      onClick={() => handleComplete(doc.id)} 
+                                      className="px-3 py-1.5 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 transition-colors"
+                                    >
+                                      Провести
+                                    </button>
+                                  )}
                                 </>
                               )}
-                              {!isDraft && <span className="text-gray-400 text-xs">—</span>}
+                              
+                              {!isDraft && (
+                                <span className="text-gray-400 text-xs">—</span>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -818,13 +1015,81 @@ export default function DocumentsPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2 text-gray-900">{typeLabels[selectedDoc.type] || 'Документ'}: {selectedDoc.doc_number}</h3>
                 <p className="text-xs text-gray-500 mt-1">Статус: <span className="font-medium">{statusConfig[selectedDoc.status]?.label}</span></p>
               </div>
-              <button onClick={() => setSelectedDoc(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors"><X className="w-5 h-5 text-gray-500" /></button>
+              <button onClick={() => setSelectedDoc(null)} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
             </div>
             <div className="p-6 max-h-[60vh] overflow-y-auto">
               {isDetailsLoading ? (
                 <div className="flex justify-center py-8"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 rounded-full border-t-transparent"></div></div>
               ) : (
                 <div className="space-y-4">
+                  {/* 🔥 КНОПКИ ЭКСПОРТА В МОДАЛКЕ - ДЛЯ ВСЕХ ДОКУМЕНТОВ */}
+                  <div className="flex gap-2 mb-4">
+                    <button 
+                      onClick={() => handleExportExcel(selectedDoc.id)} 
+                      className="flex items-center gap-2 px-3 py-1.5 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg text-sm transition-colors"
+                    >
+                      <FileSpreadsheet className="w-4 h-4" /> Excel
+                    </button>
+                    <button 
+                      onClick={() => handleExportCSV(selectedDoc.id)} 
+                      className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg text-sm transition-colors"
+                    >
+                      <Download className="w-4 h-4" /> CSV
+                    </button>
+                  </div>
+                  
+                  {/* 🔥 КНОПКА ПРОВЕСТИ В МОДАЛКЕ */}
+                  {selectedDoc.status === 'draft' && (
+                    <>
+                      {/* Кладовщик может провести только НЕ корректировку */}
+                      {isWorker && !isAdminOrManager && selectedDoc.type !== 'adjust' && (
+                        <div className="flex gap-2 mb-4">
+                          <button 
+                            onClick={() => {
+                              handleComplete(selectedDoc.id)
+                              setSelectedDoc(null)
+                            }} 
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white hover:bg-green-700 rounded-lg text-sm transition-colors"
+                          >
+                            <CheckCircle className="w-4 h-4" /> Провести документ
+                          </button>
+                        </div>
+                      )}
+                      
+                      {/* Корректировку проводит только админ/менеджер */}
+                      {selectedDoc.type === 'adjust' && isAdminOrManager && (
+                        <div className="flex gap-2 mb-4">
+                          <button 
+                            onClick={() => {
+                              handleComplete(selectedDoc.id)
+                              setSelectedDoc(null)
+                            }} 
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white hover:bg-green-700 rounded-lg text-sm transition-colors"
+                          >
+                            <CheckCircle className="w-4 h-4" /> Провести корректировку
+                          </button>
+                        </div>
+                      )}
+                      
+                      {/* Если админ+кладовщик - может всё */}
+                      {isWorker && isAdminOrManager && (
+                        <div className="flex gap-2 mb-4">
+                          <button 
+                            onClick={() => {
+                              handleComplete(selectedDoc.id)
+                              setSelectedDoc(null)
+                            }} 
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white hover:bg-green-700 rounded-lg text-sm transition-colors"
+                          >
+                            <CheckCircle className="w-4 h-4" /> Провести документ
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  
                   <table className="w-full text-sm">
                     <thead className="bg-gray-100 text-gray-600">
                       <tr>

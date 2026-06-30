@@ -12,14 +12,20 @@ from models.cell import Cell
 from models.product import Product
 from models.order import Order, OrderItem
 from models.stock import Stock
+from typing import List, Optional
 from models.document import WarehouseDocument, DocStatus, DocumentItem
+from models.product_image import ProductImage
 from schemas.catalog import (
     ZoneCreate, ZoneResponse,
     CellCreate, CellResponse,
     ProductCreate, ProductUpdate, ProductResponse
 )
+from routers.notifications import create_notification
 import csv, io, json
 from datetime import datetime
+import os
+import uuid
+import shutil
 
 try:
     import openpyxl
@@ -38,6 +44,17 @@ def create_zone(data: ZoneCreate, db: Session = Depends(get_db), current_user: U
     db.commit()
     db.refresh(zone)
     log_action(db, current_user, "CREATE", "zone", zone.id, new_value={"code": zone.code})
+    
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="📦 Новая зона",
+            message=f"Создана зона '{zone.code}'",
+            link="/products"
+        )
     return zone
 
 @router.get("/zones", response_model=list[ZoneResponse])
@@ -52,6 +69,17 @@ def create_cell(data: CellCreate, db: Session = Depends(get_db), current_user: U
     db.commit()
     db.refresh(cell)
     log_action(db, current_user, "CREATE", "cell", cell.id, new_value={"code": cell.code})
+    
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="📦 Новая ячейка",
+            message=f"Создана ячейка '{cell.code}'",
+            link="/products"
+        )
     return cell
 
 @router.get("/cells", response_model=list[CellResponse])
@@ -78,15 +106,24 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db), current_u
         
         db.commit()
         db.refresh(product)
+        
+        managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+        for manager in managers:
+            create_notification(
+                db=db,
+                user_id=manager.id,
+                type="system",
+                title="📦 Новый товар",
+                message=f"Добавлен товар '{product.name}' (SKU: {product.sku})",
+                link="/products"
+            )
         return product
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
 
-# 🔧 ИСПРАВЛЕНО: Теперь считает реальное количество на складе
-@router.get("/products") # Убрали response_model, т.к. возвращаем расширенный dict
+@router.get("/products")
 def list_products(search: str = Query(None), category: str = Query(None), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    # Запрос с объединением таблиц Product и Stock для подсчета суммы
     query = db.query(
         Product,
         func.coalesce(func.sum(Stock.quantity), 0).label('total_qty')
@@ -103,7 +140,6 @@ def list_products(search: str = Query(None), category: str = Query(None), db: Se
 
     results = query.all()
     
-    # 🔧 Формируем ответ вручную, добавляя поле quantity
     products_list = []
     for product, total_qty in results:
         p_dict = {
@@ -121,7 +157,6 @@ def list_products(search: str = Query(None), category: str = Query(None), db: Se
             "min_stock": product.min_stock,
             "max_stock": product.max_stock,
             "is_active": product.is_active,
-            # 🔧 ГЛАВНОЕ: Отправляем количество!
             "quantity": total_qty, 
             "total_quantity": total_qty
         }
@@ -129,7 +164,6 @@ def list_products(search: str = Query(None), category: str = Query(None), db: Se
         
     return products_list
 
-# 🔧 ЭКСПОРТ: CSV И XLSX
 @router.get("/products/export")
 def export_products(
     format: str = Query("csv", description="Формат экспорта: csv или xlsx"),
@@ -138,7 +172,6 @@ def export_products(
 ):
     products = db.query(Product).filter(Product.is_active == True).all()
     
-    # 🔧 ЛОГИРОВАНИЕ ЭКСПОРТА
     log_action(db, current_user, "EXPORT", "product", 0, 
                new_value={"format": format, "count": len(products)})
     
@@ -217,12 +250,22 @@ def update_product(product_id: int, data: ProductUpdate, db: Session = Depends(g
         log_action(db, current_user, "UPDATE", "product", product_id, 
                    old_value=old_value, 
                    new_value={"name": product.name, "sku": product.sku, "category": product.category, "price": float(product.sale_price or 0)})
+        
+        managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+        for manager in managers:
+            create_notification(
+                db=db,
+                user_id=manager.id,
+                type="system",
+                title="💰 Изменён товар",
+                message=f"Обновлён товар '{product.name}' (SKU: {product.sku})",
+                link="/products"
+            )
         return product
     except Exception as e:
         db.rollback()
         raise HTTPException(500, str(e))
 
-# 🔧 ЕДИНСТВЕННАЯ ФУНКЦИЯ УДАЛЕНИЯ ТОВАРА (с правильной датой архивации)
 @router.delete("/products/{product_id}")
 def delete_product(
     product_id: int, 
@@ -236,7 +279,6 @@ def delete_product(
             raise HTTPException(404, detail="Товар не найден")
         
         if hard:
-            # 🔥 ФИЗИЧЕСКОЕ УДАЛЕНИЕ
             has_deps = db.query(OrderItem.id).filter(OrderItem.product_id == product_id).first() or \
                        db.query(Stock.id).filter(Stock.product_id == product_id, Stock.quantity > 0).first() or \
                        db.query(DocumentItem.id).filter(DocumentItem.product_id == product_id).first()
@@ -247,14 +289,35 @@ def delete_product(
             db.commit()
             log_action(db, current_user, "HARD_DELETE", "product", product_id, 
                        new_value={"sku": product.sku, "name": product.name})
+            
+            managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+            for manager in managers:
+                create_notification(
+                    db=db,
+                    user_id=manager.id,
+                    type="system",
+                    title="🗑️ Товар удалён",
+                    message=f"Товар '{product.name}' (SKU: {product.sku}) полностью удалён",
+                    link="/archive"
+                )
             return {"message": "Товар полностью удалён", "hard_delete": True}
         else:
-            #  АРХИВАЦИЯ — 🔧 УСТАНАВЛИВАЕМ ДАТУ!
             product.is_active = False
-            product.archived_at = datetime.now()  # ← ВАЖНАЯ СТРОКА!
+            product.archived_at = datetime.now()
             db.commit()
             log_action(db, current_user, "ARCHIVE", "product", product_id, 
                        new_value={"sku": product.sku, "name": product.name, "archived_at": str(product.archived_at)})
+            
+            managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+            for manager in managers:
+                create_notification(
+                    db=db,
+                    user_id=manager.id,
+                    type="system",
+                    title="🗑️ Товар в архиве",
+                    message=f"Товар '{product.name}' (SKU: {product.sku}) перемещён в архив",
+                    link="/archive"
+                )
             return {"message": "Товар архивирован", "hard_delete": False}
     except HTTPException: 
         raise
@@ -329,9 +392,19 @@ def restore_product(
     log_action(db, current_user, "RESTORE", "product", product_id, 
                new_value={"sku": product.sku, "name": product.name})
     
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="♻️ Товар восстановлен",
+            message=f"Товар '{product.name}' (SKU: {product.sku}) восстановлен из архива",
+            link="/products"
+        )
+    
     return {"message": f"Товар '{product.name}' восстановлен"}
 
-# 🔧 НОВЫЙ: Эндпоинт для полного удаления из архива
 @router.delete("/products/{product_id}/permanent")
 def delete_product_permanent(
     product_id: int,
@@ -344,7 +417,6 @@ def delete_product_permanent(
         if not product:
             raise HTTPException(404, detail="Товар не найден")
         
-        # Проверяем зависимости
         has_deps = db.query(OrderItem.id).filter(OrderItem.product_id == product_id).first() or \
                    db.query(Stock.id).filter(Stock.product_id == product_id, Stock.quantity > 0).first() or \
                    db.query(DocumentItem.id).filter(DocumentItem.product_id == product_id).first()
@@ -357,6 +429,17 @@ def delete_product_permanent(
         
         log_action(db, current_user, "PERMANENT_DELETE", "product", product_id,
                    new_value={"sku": product.sku, "name": product.name})
+        
+        managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+        for manager in managers:
+            create_notification(
+                db=db,
+                user_id=manager.id,
+                type="system",
+                title="🗑️ Товар полностью удалён",
+                message=f"Товар '{product.name}' (SKU: {product.sku}) полностью удалён из системы",
+                link="/archive"
+            )
         
         return {"message": "Товар полностью удалён"}
         
@@ -412,6 +495,19 @@ def bulk_delete_products(
             error_details.append(f"Товар #{pid}: {str(e)}")
             
     db.commit()
+    
+    if success > 0:
+        managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+        for manager in managers:
+            create_notification(
+                db=db,
+                user_id=manager.id,
+                type="system",
+                title="🗑️ Массовое удаление",
+                message=f"Удалено {success} товаров" + (" (полностью)" if hard else " (в архив)"),
+                link="/archive"
+            )
+    
     return {
         "success": success,
         "errors": errors,
@@ -433,6 +529,17 @@ async def import_products(file: UploadFile = File(...), db: Session = Depends(ge
         if result.get("status") == "success":
             log_action(db, current_user, "BULK_IMPORT", "product", 0, 
                        new_value={"file": file.filename, "created": result["created"], "updated": result["updated"]})
+            
+            managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+            for manager in managers:
+                create_notification(
+                    db=db,
+                    user_id=manager.id,
+                    type="system",
+                    title="📥 Импорт товаров",
+                    message=f"Импортировано {result['created']} новых и обновлено {result['updated']} товаров",
+                    link="/products"
+                )
         return result
     except Exception as e:
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
@@ -528,6 +635,17 @@ def create_category(name: str = Query(...), db: Session = Depends(get_db), curre
     if db.query(Product.id).filter(Product.category.ilike(name), Product.is_active == True).first():
         raise HTTPException(400, detail="Категория существует")
     log_action(db, current_user, "CREATE", "category", 0, new_value={"name": name})
+    
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="📂 Новая категория",
+            message=f"Создана категория '{name}'",
+            link="/products"
+        )
     return {"name": name, "message": "Готово"}
 
 @router.put("/categories/{old_name}")
@@ -546,6 +664,17 @@ def update_category(old_name: str, new_name: str = Query(...), db: Session = Dep
     cnt = db.query(Product).filter(Product.category == old_name, Product.is_active == True).update({"category": new_name}, synchronize_session=False)
     db.commit()
     log_action(db, current_user, "UPDATE", "category", 0, old_value={"name": old_name}, new_value={"name": new_name, "affected": cnt})
+    
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="📂 Категория переименована",
+            message=f"Категория '{old_name}' переименована в '{new_name}'",
+            link="/products"
+        )
     return {"message": "Обновлено", "updated_products": cnt}
 
 @router.delete("/categories/{name}")
@@ -560,4 +689,143 @@ def delete_category(name: str, db: Session = Depends(get_db), current_user: User
     cnt = db.query(Product).filter(Product.category == name, Product.is_active == True).update({"category": None}, synchronize_session=False)
     db.commit()
     log_action(db, current_user, "DELETE", "category", 0, new_value={"name": name, "affected": cnt})
+    
+    managers = db.query(User).filter(User.role.in_(['admin', 'warehouse_manager'])).all()
+    for manager in managers:
+        create_notification(
+            db=db,
+            user_id=manager.id,
+            type="system",
+            title="📂 Категория удалена",
+            message=f"Категория '{name}' удалена, {cnt} товаров без категории",
+            link="/products"
+        )
     return {"message": f"Удалена. {cnt} товаров без категории."}
+
+
+# ============================================
+# 🔥 ФОТО ТОВАРОВ
+# ============================================
+
+@router.post("/products/{product_id}/images")
+async def upload_product_images(
+    product_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Загрузить фото для товара"""
+    if current_user.role not in ["admin", "warehouse_manager"]:
+        raise HTTPException(403, "Доступ запрещён")
+    
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(404, "Товар не найден")
+    
+    upload_dir = "static/products"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    uploaded_images = []
+    for file in files:
+        ext = os.path.splitext(file.filename)[1]
+        filename = f"product_{product_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}"
+        filepath = os.path.join(upload_dir, filename)
+        
+        with open(filepath, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        existing_main = db.query(ProductImage).filter(
+            ProductImage.product_id == product_id,
+            ProductImage.is_main == True
+        ).first()
+        
+        image = ProductImage(
+            product_id=product_id,
+            image_url=f"/static/products/{filename}",
+            is_main=not bool(existing_main),
+            order=len(db.query(ProductImage).filter(ProductImage.product_id == product_id).all())
+        )
+        db.add(image)
+        uploaded_images.append(image)
+    
+    db.commit()
+    return {"message": f"Загружено {len(uploaded_images)} фото", "images": uploaded_images}
+
+
+@router.get("/products/{product_id}/images")
+def get_product_images(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Получить фото товара"""
+    images = db.query(ProductImage).filter(
+        ProductImage.product_id == product_id
+    ).order_by(ProductImage.is_main.desc(), ProductImage.order.asc()).all()
+    
+    return [
+        {
+            "id": img.id,
+            "image_url": img.image_url,
+            "is_main": img.is_main,
+            "order": img.order
+        }
+        for img in images
+    ]
+
+
+@router.delete("/products/images/{image_id}")
+def delete_product_image(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Удалить фото товара"""
+    if current_user.role not in ["admin", "warehouse_manager"]:
+        raise HTTPException(403, "Доступ запрещён")
+    
+    image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    if not image:
+        raise HTTPException(404, "Фото не найдено")
+    
+    file_path = image.image_url.lstrip('/')
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    
+    if image.is_main:
+        next_image = db.query(ProductImage).filter(
+            ProductImage.product_id == image.product_id,
+            ProductImage.id != image_id
+        ).order_by(ProductImage.order.asc()).first()
+        if next_image:
+            next_image.is_main = True
+    
+    db.delete(image)
+    db.commit()
+    
+    return {"message": "Фото удалено"}
+
+
+@router.post("/products/images/{image_id}/set-main")
+def set_main_image(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Сделать фото главным"""
+    if current_user.role not in ["admin", "warehouse_manager"]:
+        raise HTTPException(403, "Доступ запрещён")
+    
+    image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    if not image:
+        raise HTTPException(404, "Фото не найдено")
+    
+    db.query(ProductImage).filter(
+        ProductImage.product_id == image.product_id
+    ).update({"is_main": False})
+    
+    image.is_main = True
+    db.commit()
+    
+    return {"message": "Главное фото установлено"}

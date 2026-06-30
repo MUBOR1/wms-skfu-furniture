@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { auth } from '../api/wms'
+import { auth, saveToken } from '../api/wms' // 🔥 ДОБАВЛЯЕМ saveToken
 import { useAuth } from '../context/AuthContext'
-import type { UserRole } from '../context/AuthContext'  // ← type-only import для verbatimModuleSyntax
+import type { UserRole } from '../context/AuthContext'
 import { Package, Lock, User } from 'lucide-react'
 
 export default function LoginPage() {
-  const [login, setLogin] = useState('')
-  const [password, setPassword] = useState('')
+  const [login, setLogin] = useState('admin')
+  const [password, setPassword] = useState('strong_password_123')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const { login: authLogin } = useAuth()
@@ -19,46 +19,52 @@ export default function LoginPage() {
     setIsLoading(true)
     
     try {
-      // 1. Получаем токен
+      console.log('🔐 Попытка входа:', login)
+      
+      // 1. Логинимся
       const response = await auth.login({ login, password })
       const token = response.access_token
+      console.log('✅ Получен токен:', token.substring(0, 30) + '...')
       
-      // 2. Сохраняем в localStorage
-      localStorage.setItem('wms_token', token)
+      // 🔥🔥🔥 ВАЖНО: СОХРАНЯЕМ ТОКЕН СРАЗУ!
+      saveToken(token)
+      console.log('💾 Токен сохранен в sessionStorage')
       
-      // 3. Получаем данные пользователя с явной типизацией
-      const userData = await auth.me() as { 
-        id: number; 
-        login: string; 
-        role: UserRole;
-        full_name: string | null;
-        is_active: boolean;
+      // Проверяем, что сохранилось
+      const saved = sessionStorage.getItem('wms_auth')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        console.log('✅ Проверка: токен в sessionStorage есть:', parsed.token ? 'да' : 'нет')
       }
       
-      // 4. Сохраняем пользователя
-      localStorage.setItem('wms_user', JSON.stringify({
-        id: userData.id,
-        login: userData.login,
-        role: userData.role,
-        full_name: userData.full_name
-      }))
+      // 2. Получаем данные пользователя
+      console.log('🔄 Запрашиваем данные пользователя...')
+      const userData = await auth.me()
+      console.log('✅ Получены данные пользователя:', userData)
       
-      // 5. Обновляем контекст
+      // 3. Сохраняем пользователя в контекст
       authLogin(token, {
         id: userData.id,
         login: userData.login,
         role: userData.role as UserRole,
-        full_name: userData.full_name
+        full_name: userData.full_name,
+        is_active: userData.is_active
       })
       
-      // 6. Переходим в дашборд
-      navigate('/dashboard')
+      // 4. Перенаправляем в зависимости от роли
+      if (userData.role === 'client') {
+        navigate('/client')
+      } else {
+        navigate('/dashboard')
+      }
       
     } catch (err: any) {
-      console.error('Login error:', err)
+      console.error('❌ Ошибка входа:', err)
       setError(err.message || 'Ошибка входа')
+      // Очищаем все при ошибке
       localStorage.removeItem('wms_token')
       localStorage.removeItem('wms_user')
+      sessionStorage.removeItem('wms_auth')
     } finally {
       setIsLoading(false)
     }
@@ -71,7 +77,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-indigo-100 mb-4">
             <Package className="w-8 h-8 text-indigo-600" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">WMS </h1>
+          <h1 className="text-2xl font-bold text-gray-900">WMS</h1>
           <p className="text-gray-500">Учебный прототип ВКР • СКФУ</p>
         </div>
 

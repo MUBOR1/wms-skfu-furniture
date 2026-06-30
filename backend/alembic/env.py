@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 from logging.config import fileConfig
-from models.audit import AuditLog
 
 # 1. СНАЧАЛА добавляем backend в PYTHONPATH, чтобы Alembic видел наши модули
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -13,7 +12,6 @@ from alembic import context
 from database import Base, settings, engine
 
 # Импортируем ВСЕ модели для Alembic (чтобы он их видел при авто-генерации)
-# Порядок не важен, главное — чтобы все были здесь
 from models.user import User
 from models.product import Product
 from models.zone import Zone
@@ -22,9 +20,9 @@ from models.stock import Stock
 from models.document import WarehouseDocument, DocumentItem
 from models.inventory import Inventory, InventoryRecord
 from models.order import Order, OrderItem  # ← Заказы добавлены
-
-# Убираем дубли и лишние импорты из одной строки — используем явные импорты выше
-# Это надёжнее и понятнее для Alembic
+from models.profile import UserProfile, Favorite, Review, CartItem
+from models.audit import AuditLog
+from models.chat import ChatMessage
 
 # Alembic Config object
 config = context.config
